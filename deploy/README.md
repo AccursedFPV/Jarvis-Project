@@ -33,7 +33,7 @@ cd /root/Jarvis && bash deploy/vps-install.sh
 ```
 
 The installer creates a `jarvis` service user, installs into `/opt/jarvis` with
-its own virtualenv (plus the `[listen]` extra for phone voice), generates
+its own virtualenv (plus the `[stt]` extra, so `/voice` can transcribe there), generates
 `/etc/jarvis.env` with a random token, installs
 `contrib/jarvis-serve.service`, starts it, and configures `ufw` so port 8787 is
 only reachable over `tailscale0`.

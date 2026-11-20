@@ -13,6 +13,9 @@ dependencies = []
 [project.optional-dependencies]
 voice = ["SpeechRecognition>=3.10"]
 listen = ["numpy>=1.24", "sounddevice>=0.4.6", "openwakeword>=0.6", "faster-whisper>=1.0"]
+# The server only needs local speech recognition for POST /voice. It does not do
+# wake words, and openWakeWord pulls tflite-runtime, which has no Python 3.12 wheel.
+stt = ["numpy>=1.24", "faster-whisper>=1.0"]
 
 [project.scripts]
 jarvis = "jarvis.cli:main"

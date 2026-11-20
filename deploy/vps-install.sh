@@ -51,8 +51,10 @@ fi
 echo "==> creating the virtualenv and installing Jarvis"
 python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --quiet --upgrade pip
-# [listen] adds faster-whisper/sounddevice so POST /voice can transcribe here.
-"$APP_DIR/.venv/bin/pip" install --quiet -e "$APP_DIR[listen]"
+# [stt] adds numpy + faster-whisper so POST /voice can transcribe here. It is not
+# [listen]: that also pulls openWakeWord, whose tflite-runtime has no 3.12 wheel,
+# and a headless server has no wake word to listen for anyway.
+"$APP_DIR/.venv/bin/pip" install --quiet -e "$APP_DIR[stt]"
 
 echo "==> writing $ENV_FILE"
 if [ ! -f "$ENV_FILE" ]; then
