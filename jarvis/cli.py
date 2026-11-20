@@ -33,7 +33,7 @@ from .learning import Learnings
 from .llm import LLM, LLMError
 from .memory import Memory
 from .skills import Skills
-from .tools import TOOLS, Toolbox
+from .tools import TOOLS, Toolbox, search_web
 from .ui import UI
 
 LOCAL_SETUP_HELP = """
@@ -148,7 +148,8 @@ def build_parser() -> argparse.ArgumentParser:
         '  jarvis --listen                          wake on "Hey Jarvis" and answer out loud\n'
         '  jarvis --serve                           let your phone use this PC over Tailscale/LAN\n'
         '  jarvis -y "clean up the temp folder"     auto-approve risky actions\n'
-        '  jarvis --config                          show resolved settings\n',
+        '  jarvis --config                          show resolved settings\n'
+        '  jarvis search "best earbuds"             check web search works from this box\n',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("prompt", nargs="*", help="ask a single question and exit")
@@ -200,6 +201,35 @@ def print_config(config: Config) -> None:
     print("state folder : %s" % state_dir())
     print("session file : %s" % session_file())
     print("memory file  : %s" % memory_file())
+
+
+def search_check(query: str) -> int:
+    """Prove web search works from this machine, without spending model tokens."""
+    query = " ".join(str(query or "").split())
+    if not query:
+        print('usage: jarvis search "best earbuds"')
+        return 2
+    print('searching: "%s"' % query)
+    engine, results, problems = search_web(query, 5)
+    if not results:
+        print("engine   : none")
+        print("every engine refused:")
+        for problem in problems:
+            print("  - %s" % problem)
+        print("search does NOT work from this box right now.")
+        return 1
+    print("engine   : %s" % engine)
+    if problems:
+        print("skipped  : %s" % "; ".join(problems))
+    print()
+    for number, (title, link, snippet) in enumerate(results, 1):
+        print("%d. %s" % (number, title))
+        print("   %s" % link)
+        if snippet:
+            print("   %s" % snippet)
+    print()
+    print("search works from this box (%s answered)." % engine)
+    return 0
 
 
 def _prompt_for_approval(ui: UI):
@@ -497,6 +527,10 @@ def _run_server(agent: Agent, ui: UI, config: Config, host: Optional[str], port:
 
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
+    # `jarvis search "..."` is a search check, not a question for the model, so
+    # it needs neither an API key nor the conversation.
+    if args.prompt and args.prompt[0].lower() == "search":
+        return search_check(" ".join(args.prompt[1:]))
     ui = UI(color=not args.no_color)
 
     config = apply_env_overrides(load_config())

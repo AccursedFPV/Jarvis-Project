@@ -394,6 +394,26 @@ _SEARCH_SNIPPET_PATTERNS = (
     re.compile(r'<p class="b_lineclamp[^"]*"[^>]*>(.*?)</p>', re.S),
 )
 _SEARCH_SKIP = ("duckduckgo.com", "bing.com", "microsoft.com", "google.com/search")
+# Words too common to tell a relevant result from an unrelated one.
+_SEARCH_STOPWORDS = {
+    "the", "and", "for", "with", "from", "about", "into", "that", "this", "these",
+    "those", "best", "good", "great", "top", "review", "reviews", "cheap", "buy",
+    "what", "which", "who", "how", "why", "when", "where", "does", "can", "you",
+    "your", "have", "has", "was", "were", "are", "its", "their", "there", "than",
+}
+
+
+def _relevant(results: List[Any], query: str) -> bool:
+    """An engine that answers with unrelated pages has effectively failed."""
+    words = [
+        word
+        for word in re.findall(r"[a-z0-9]+", query.lower())
+        if len(word) > 2 and word not in _SEARCH_STOPWORDS
+    ]
+    if not words or not results:
+        return bool(results)
+    haystack = " ".join(("%s %s" % (title, snippet)).lower() for title, _, snippet in results)
+    return any(word in haystack for word in words)
 
 
 def _parse_bing(raw: str, limit: int) -> List[Any]:
@@ -468,6 +488,40 @@ def _parse_search_results(raw: str, limit: int) -> List[Any]:
         snippet = snippets[index] if index < len(snippets) else ""
         results.append((name, url, snippet[:300]))
     return results
+
+
+def search_web(query: str, limit: int = 5) -> Any:
+    """Search the web, trying each engine in turn until one answers.
+
+    Returns (engine, results, problems): the engine that answered, its
+    (title, url, snippet) results, and one line per engine that failed.
+    """
+    quoted = urllib.parse.quote_plus(query)
+    engines = (
+        ("duckduckgo", "https://html.duckduckgo.com/html/?q=" + quoted, _parse_search_results),
+        ("duckduckgo lite", "https://lite.duckduckgo.com/lite/?q=" + quoted, _parse_search_results),
+        ("bing", "https://www.bing.com/search?q=" + quoted, _parse_bing),
+        (
+            "wikipedia",
+            "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=%d&srsearch="
+            % limit + quoted,
+            _parse_wikipedia,
+        ),
+    )
+    problems = []
+    for name, url, parser in engines:
+        request = urllib.request.Request(url, headers=PAGE_HEADERS)
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                raw = response.read(MAX_FETCH_BYTES).decode("utf-8", "replace")
+        except Exception as exc:
+            problems.append("%s: %s" % (name, exc))
+            continue
+        results = parser(raw, limit)
+        if results and _relevant(results, query):
+            return name, results, problems
+        problems.append("%s: %s" % (name, "only unrelated results" if results else "no results"))
+    return "", [], problems
 
 
 # -------------------------------------------------------------------- toolbox
@@ -832,34 +886,11 @@ class Toolbox:
         if not query:
             return "ERROR: query is required"
         limit = _int(count, 5, 1, 10)
-        quoted = urllib.parse.quote_plus(query)
-        engines = (
-            ("duckduckgo", "https://html.duckduckgo.com/html/?q=" + quoted, _parse_search_results),
-            ("duckduckgo lite", "https://lite.duckduckgo.com/lite/?q=" + quoted, _parse_search_results),
-            ("bing", "https://www.bing.com/search?q=" + quoted, _parse_bing),
-            (
-                "wikipedia",
-                "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=%d&srsearch="
-                % limit + quoted,
-                _parse_wikipedia,
-            ),
-        )
-        problems = []
-        for name, url, parser in engines:
-            request = urllib.request.Request(url, headers=PAGE_HEADERS)
-            try:
-                with urllib.request.urlopen(request, timeout=20) as response:
-                    raw = response.read(MAX_FETCH_BYTES).decode("utf-8", "replace")
-            except Exception as exc:
-                problems.append("%s: %s" % (name, exc))
-                continue
-            results = parser(raw, limit)
-            if not results:
-                problems.append("%s: no results" % name)
-                continue
+        engine, results, problems = search_web(query, limit)
+        if results:
             lines = [
                 "Results for %r from %s. These addresses are real: give them to the user as links."
-                % (query, name)
+                % (query, engine)
             ]
             for number, (title, link, snippet) in enumerate(results, 1):
                 lines.append("%d. %s\n   %s" % (number, title, link))
