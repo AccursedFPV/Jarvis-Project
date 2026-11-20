@@ -27,6 +27,17 @@ from .skills import SKILL_PREFIX, Skills
 MAX_OUTPUT = 12000
 MAX_READ_BYTES = 5_000_000
 MAX_FETCH_BYTES = 2_000_000
+# DuckDuckGo answers a bot-looking User-Agent with an empty "anomaly" page and
+# HTTP 202, so every request goes out looking like a phone browser instead.
+BROWSER_UA = (
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+)
+PAGE_HEADERS = {
+    "User-Agent": BROWSER_UA,
+    "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache"}
 APPROVAL_REQUIRED = {
@@ -368,24 +379,90 @@ def _result_url(href: str) -> str:
     return href
 
 
-_SEARCH_LINK = re.compile(
-    r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>'
-    r'|<a[^>]*href="([^"]+)"[^>]*class="result__a"[^>]*>(.*?)</a>',
-    re.S,
+# The three engines the search tool falls back through, in order. Each marks
+# its results differently, so there is one pattern per markup.
+_SEARCH_LINK_PATTERNS = (
+    re.compile(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S),
+    re.compile(r'href="([^"]+)"[^>]*class="result__a"[^>]*>(.*?)</a>', re.S),
+    re.compile(r'<a[^>]*class=["\']result-link["\'][^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.S),
+    re.compile(r'<a[^>]*href=["\']([^"\']+)["\'][^>]*class=["\']result-link["\'][^>]*>(.*?)</a>', re.S),
+    re.compile(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S),
 )
-_SEARCH_SNIPPET = re.compile(r'class="result__snippet"[^>]*>(.*?)</a>', re.S)
+_SEARCH_SNIPPET_PATTERNS = (
+    re.compile(r'class="result__snippet"[^>]*>(.*?)</a>', re.S),
+    re.compile(r'class=["\']result-snippet["\'][^>]*>(.*?)</td>', re.S),
+    re.compile(r'<p class="b_lineclamp[^"]*"[^>]*>(.*?)</p>', re.S),
+)
+_SEARCH_SKIP = ("duckduckgo.com", "bing.com", "microsoft.com", "google.com/search")
+
+
+def _parse_bing(raw: str, limit: int) -> List[Any]:
+    """Bing puts the link on an anchor that wraps the heading, so work per block."""
+    results: List[Any] = []
+    for block in re.split(r'<li class="b_algo"', raw)[1:]:
+        heading = re.search(r"<h2[^>]*>(.*?)</h2>", block, re.S)
+        if not heading:
+            continue
+        name = _strip_tags(heading.group(1))
+        link = ""
+        for match in re.finditer(r'<a[^>]+href="(https?://[^"]+)"', block):
+            candidate = _result_url(match.group(1))
+            if any(host in candidate for host in _SEARCH_SKIP):
+                continue
+            link = candidate
+            break
+        if not name or not link:
+            continue
+        caption = re.search(r'<p class="b_lineclamp[^"]*"[^>]*>(.*?)</p>', block, re.S)
+        snippet = _strip_tags(caption.group(1)) if caption else ""
+        results.append((name, link, snippet[:300]))
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _parse_wikipedia(raw: str, limit: int) -> List[Any]:
+    try:
+        pages = json.loads(raw)["query"]["search"]
+    except Exception:
+        return []
+    results = []
+    for page in pages[:limit]:
+        title = page.get("title") or ""
+        snippet = re.sub(r"<[^>]+>", " ", page.get("snippet") or "")
+        if title:
+            results.append(
+                (title, "https://en.wikipedia.org/wiki/" + title.replace(" ", "_"), html.unescape(snippet)[:300])
+            )
+    return results
 
 
 def _parse_search_results(raw: str, limit: int) -> List[Any]:
-    links = []
-    for match in _SEARCH_LINK.finditer(raw):
-        href = match.group(1) or match.group(3) or ""
-        title = match.group(2) or match.group(4) or ""
-        url = _result_url(href)
-        name = _strip_tags(title)
-        if url.startswith("http") and name:
+    links: List[Any] = []
+    seen = set()
+    for pattern in _SEARCH_LINK_PATTERNS:
+        for match in pattern.finditer(raw):
+            url = _result_url(match.group(1))
+            name = _strip_tags(match.group(2))
+            if not url.startswith("http") or not name:
+                continue
+            if any(host in url for host in _SEARCH_SKIP):
+                continue
+            key = url.split("#")[0]
+            if key in seen:
+                continue
+            seen.add(key)
             links.append((name, url))
-    snippets = [_strip_tags(chunk) for chunk in _SEARCH_SNIPPET.findall(raw)]
+            if len(links) >= limit:
+                break
+        if len(links) >= limit:
+            break
+    snippets: List[str] = []
+    for pattern in _SEARCH_SNIPPET_PATTERNS:
+        found = [_strip_tags(chunk) for chunk in pattern.findall(raw)]
+        if found:
+            snippets = found
+            break
     results = []
     for index, (name, url) in enumerate(links[:limit]):
         snippet = snippets[index] if index < len(snippets) else ""
@@ -721,14 +798,14 @@ class Toolbox:
     def fetch_url(self, url: str, max_chars: int = 8000, **_: Any) -> str:
         url = str(url or "").strip()
         if not _is_url(url):
-            return "ERROR: only http:// and https:// URLs can be fetched"
-        request = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; Jarvis/0.1; personal assistant)",
-                "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
-            },
-        )
+            # Models often drop the scheme: amazon.com/s rather than https://...
+            if re.match(r"^[a-z0-9-]+(\.[a-z0-9-]+)+([/?#]|$)", url, re.IGNORECASE):
+                url = "https://" + url
+        if not _is_url(url):
+            return "ERROR: %r is not a web address. Give one like https://example.com/page" % url
+        headers = dict(PAGE_HEADERS)
+        headers["Accept"] = "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8"
+        request = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=25) as response:
                 content_type = response.headers.get("Content-Type", "")
@@ -755,31 +832,46 @@ class Toolbox:
         if not query:
             return "ERROR: query is required"
         limit = _int(count, 5, 1, 10)
-        url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote_plus(query)
-        request = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; Jarvis/0.2; personal assistant)",
-                "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-            },
+        quoted = urllib.parse.quote_plus(query)
+        engines = (
+            ("duckduckgo", "https://html.duckduckgo.com/html/?q=" + quoted, _parse_search_results),
+            ("duckduckgo lite", "https://lite.duckduckgo.com/lite/?q=" + quoted, _parse_search_results),
+            ("bing", "https://www.bing.com/search?q=" + quoted, _parse_bing),
+            (
+                "wikipedia",
+                "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=%d&srsearch="
+                % limit + quoted,
+                _parse_wikipedia,
+            ),
         )
-        try:
-            with urllib.request.urlopen(request, timeout=25) as response:
-                raw = response.read(MAX_FETCH_BYTES).decode("utf-8", "replace")
-        except Exception as exc:
-            return "ERROR: could not search for %r: %s" % (query, exc)
-        results = _parse_search_results(raw, limit)
-        if not results:
-            return (
-                "No results for %r - the search engine may be blocking automated queries. "
-                "Try fetch_url on a site you know, or a different phrasing." % query
-            )
-        lines = []
-        for number, (title, link, snippet) in enumerate(results, 1):
-            lines.append("%d. %s\n   %s" % (number, title, link))
-            if snippet:
-                lines.append("   " + snippet)
-        return "Results for %r (read one with fetch_url):\n" % query + "\n".join(lines)
+        problems = []
+        for name, url, parser in engines:
+            request = urllib.request.Request(url, headers=PAGE_HEADERS)
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    raw = response.read(MAX_FETCH_BYTES).decode("utf-8", "replace")
+            except Exception as exc:
+                problems.append("%s: %s" % (name, exc))
+                continue
+            results = parser(raw, limit)
+            if not results:
+                problems.append("%s: no results" % name)
+                continue
+            lines = [
+                "Results for %r from %s. These addresses are real: give them to the user as links."
+                % (query, name)
+            ]
+            for number, (title, link, snippet) in enumerate(results, 1):
+                lines.append("%d. %s\n   %s" % (number, title, link))
+                if snippet:
+                    lines.append("   " + snippet)
+            return "\n".join(lines)
+        return (
+            "Search is unavailable right now: no engine returned results for %r (%s). "
+            "Do not search again this turn - every engine is blocked, so retrying only wastes steps. "
+            "Tell the user search is down in one line and answer from what you already know."
+            % (query, "; ".join(problems))
+        )
 
     # ----------------------------------------------------------- self-extension
 

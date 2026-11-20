@@ -157,6 +157,7 @@ class Agent:
         steps = 0
         offer_tools = True
         nudged = False
+        empty_nudged = False
         stuck = False
         seen: Dict[str, int] = {}
         per_tool: Dict[str, int] = {}
@@ -184,6 +185,19 @@ class Agent:
 
                 if not reply.tool_calls:
                     text = (reply.content or "").strip()
+                    # An empty message after real tool results is a dropout, not
+                    # an answer; ask once for the answer in plain text.
+                    if not text:
+                        self.history.pop()
+                        if not empty_nudged:
+                            empty_nudged = True
+                            self._nudge = (
+                                "Your last message was empty. The tool results are already above you: "
+                                "answer the user now, in plain text, from what they contain - with the "
+                                "links if the answer includes any. Do not call another tool."
+                            )
+                            continue
+                        return _EMPTY
                     # Some providers serialise a tool call into the text stream
                     # (<arg_key>...). That is not an answer, and showing it is
                     # worse than useless.
@@ -295,6 +309,11 @@ class Agent:
 _GAVE_UP = (
     "I stopped myself there: I kept repeating the same step without getting anywhere. "
     "Ask me again, or tell me exactly what you want me to do."
+)
+
+_EMPTY = (
+    "I did the steps but ended up with nothing to say, which is on me. "
+    "Ask me again, or give me one link to start from."
 )
 
 _GARBLED = (
