@@ -389,6 +389,8 @@ async function send(message) {
       line.textContent = event.d;
       view.steps.appendChild(line);
       view.head.textContent = "working";
+      // Anything written before a tool ran was narration, not the answer.
+      if (answer) { answer.textContent = ""; }
     } else if (event.t === "say") {
       answerBubble().textContent += event.d;
     } else if (event.t === "error") {

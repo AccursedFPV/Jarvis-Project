@@ -18,6 +18,8 @@ from .tools import Toolbox
 from .ui import UI
 
 MAX_HISTORY_MESSAGES = 120
+# A turn should not research in circles: this many calls to one tool ends it.
+MAX_CALLS_PER_TOOL = 5
 
 
 def _max_steps() -> int:
@@ -155,6 +157,7 @@ class Agent:
         nudged = False
         stuck = False
         seen: Dict[str, int] = {}
+        per_tool: Dict[str, int] = {}
         try:
             while True:
                 reply = self.llm.chat(
@@ -206,6 +209,23 @@ class Agent:
                 for call in reply.tool_calls:
                     if on_tool:
                         on_tool()
+                    per_tool[call.name] = per_tool.get(call.name, 0) + 1
+                    if per_tool[call.name] > MAX_CALLS_PER_TOOL:
+                        # Even with new arguments, this many calls means it is
+                        # researching in circles. Answer with what it has.
+                        stuck = True
+                        if on_step:
+                            on_step("stopped after %d calls to %s" % (MAX_CALLS_PER_TOOL, call.name))
+                        self.history.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call.id,
+                                "content": "ERROR: you have already used this tool %d times in this turn. "
+                                "Stop calling tools and answer from what you already know."
+                                % MAX_CALLS_PER_TOOL,
+                            }
+                        )
+                        continue
                     key = "%s|%s" % (call.name, (call.arguments or "").strip()[:400])
                     seen[key] = seen.get(key, 0) + 1
                     if seen[key] > 2:
