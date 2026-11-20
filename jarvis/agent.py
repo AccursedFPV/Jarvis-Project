@@ -37,6 +37,8 @@ opening files and URLs, launching installed applications, searching the web and 
 keeping long-term memory, planning multi-step work, and writing new tools for yourself.
 
 How to work:
+- The user's newest message is the whole task. Earlier turns are context, not a to-do list: when they drop a topic ("forget it", "never mind", "no, not that"), drop it too and never search for it again.
+- Answer only what was just asked. Do not re-answer or re-run something the user has moved past, and keep following an instruction they gave once ("keep answers shorter") until they change it.
 - Do the task, end to end. Plan briefly, act, check the result, then answer. Never only describe what you would do.
 - Announcing is not acting. Never reply with only "I'll check...", "Let me..." or "I will fetch...". If the answer needs data, call the tool in that same turn, with its arguments. The date and time are already in this prompt, so a question about today needs no tool at all.
 - Small talk like "how are you" is not a research task: answer it in one line from what you already know. Never search the web for it.
@@ -242,23 +244,36 @@ class Agent:
                             "search words. If it does not, answer from what you already know." % text[:200]
                         )
                         continue
-                    # A promise is not an answer. Whether it had not acted yet or
-                    # had already searched and was planning more, it gets exactly
-                    # one chance to answer from what it has.
+                    # A promise is not an answer. It gets exactly one chance to
+                    # keep it or to answer from what it already has.
                     if _announces(text) or (steps and _promises_more(text)):
                         self.history.pop()
                         if not nudged:
                             nudged = True
-                            offer_tools = False
-                            self._nudge = (
-                                "Your last message announced or planned more work instead of "
-                                "answering: %r. Do not plan and do not call another tool. Answer now "
-                                "in plain language from what you already have, giving the real address "
-                                "of anything you recommend. If the results were useless, say so in one "
-                                "line and name what you searched for." % text[:200]
-                            )
+                            if steps:
+                                # It searched and is planning more: close the
+                                # tools so the next message has to be the answer.
+                                offer_tools = False
+                                self._nudge = (
+                                    "Your last message announced or planned more work instead of "
+                                    "answering: %r. Do not plan and do not call another tool. Answer now "
+                                    "in plain language from what you already have, giving the real address "
+                                    "of anything you recommend. If the results were useless, say so in one "
+                                    "line and name what you searched for." % text[:200]
+                                )
+                            else:
+                                # Nothing has run yet, so closing the tools would
+                                # leave it with nothing to answer from. Let it
+                                # take the step it just announced instead.
+                                self._nudge = (
+                                    "Your last message announced a step instead of taking it: %r. "
+                                    "Do not describe it again. Either call the tool now with real "
+                                    "arguments, or answer the user's latest message directly in plain "
+                                    "language. The latest message is the whole task: if the user "
+                                    "dropped an earlier topic, do not act on it." % text[:200]
+                                )
                             continue
-                        return _GAVE_UP
+                        return _PLANNED
                     return text
 
                 if not offer_tools:
@@ -370,6 +385,11 @@ class Agent:
 _GAVE_UP = (
     "I stopped myself there: I kept repeating the same step without getting anywhere. "
     "Ask me again, or tell me exactly what you want me to do."
+)
+
+_PLANNED = (
+    "I kept describing what I was about to do instead of doing it, so nothing happened. "
+    "Ask me again, or tell me the one thing you want me to look up."
 )
 
 _STOPPED = "Stopped at your request."
