@@ -318,7 +318,9 @@ def _commit_source(root: Path, note: str = "") -> str:
     """
     if not (root / "pyproject.toml").is_file() or shutil.which("git") is None:
         return ""
-    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_AUTHOR_NAME="Jarvis", GIT_AUTHOR_EMAIL="jarvis@localhost")
+    who = {"GIT_AUTHOR_NAME": "Jarvis", "GIT_AUTHOR_EMAIL": "jarvis@localhost"}
+    who.update({"GIT_COMMITTER_NAME": who["GIT_AUTHOR_NAME"], "GIT_COMMITTER_EMAIL": who["GIT_AUTHOR_EMAIL"]})
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", **who)
 
     def git(*args: str):
         return subprocess.run(
