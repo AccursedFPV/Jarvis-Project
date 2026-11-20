@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import Config
-from .llm import LLM
+from .llm import LLM, LLMError
 from .memory import Memory
 from .tools import Toolbox
 from .ui import UI
@@ -151,7 +151,11 @@ class Agent:
         model: Optional[str] = None,
         on_reasoning: Optional[Callable[[str], None]] = None,
         on_step: Optional[Callable[[str], None]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> str:
+        def stopped() -> bool:
+            return bool(should_stop and should_stop())
+
         checkpoint = len(self.history)
         self.history.append({"role": "user", "content": user_text})
         steps = 0
@@ -163,14 +167,22 @@ class Agent:
         per_tool: Dict[str, int] = {}
         try:
             while True:
-                reply = self.llm.chat(
-                    self.request_messages(),
-                    self.toolbox.schemas() if offer_tools else None,
-                    temperature=self.config.temperature,
-                    on_token=on_token,
-                    model=model,
-                    on_reasoning=on_reasoning,
-                )
+                if stopped():
+                    return _STOPPED
+                try:
+                    reply = self.llm.chat(
+                        self.request_messages(),
+                        self.toolbox.schemas() if offer_tools else None,
+                        temperature=self.config.temperature,
+                        on_token=on_token,
+                        model=model,
+                        on_reasoning=on_reasoning,
+                        should_stop=should_stop,
+                    )
+                except LLMError:
+                    if stopped():
+                        return _STOPPED
+                    raise
                 assistant: Dict[str, Any] = {"role": "assistant", "content": reply.content or ""}
                 if reply.tool_calls:
                     assistant["tool_calls"] = [
@@ -187,6 +199,8 @@ class Agent:
                     text = (reply.content or "").strip()
                     # An empty message after real tool results is a dropout, not
                     # an answer; ask once for the answer in plain text.
+                    if stopped():
+                        return text or _STOPPED
                     if not text:
                         self.history.pop()
                         if not empty_nudged:
@@ -250,6 +264,8 @@ class Agent:
 
                 steps += len(reply.tool_calls)
                 for call in reply.tool_calls:
+                    if stopped():
+                        return _STOPPED
                     if on_tool:
                         on_tool()
                     per_tool[call.name] = per_tool.get(call.name, 0) + 1
@@ -310,6 +326,8 @@ _GAVE_UP = (
     "I stopped myself there: I kept repeating the same step without getting anywhere. "
     "Ask me again, or tell me exactly what you want me to do."
 )
+
+_STOPPED = "Stopped at your request."
 
 _EMPTY = (
     "I did the steps but ended up with nothing to say, which is on me. "

@@ -177,6 +177,7 @@ class LLM:
         on_token: Optional[Callable[[str], None]] = None,
         model: Optional[str] = None,
         on_reasoning: Optional[Callable[[str], None]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> Reply:
         budget = _budget()
         started = time.monotonic()
@@ -196,7 +197,17 @@ class LLM:
                 break
             try:
                 return self._with_retries(
-                    url, key, name, messages, tools, temperature, on_token, attempts, deadline, on_reasoning
+                    url,
+                    key,
+                    name,
+                    messages,
+                    tools,
+                    temperature,
+                    on_token,
+                    attempts,
+                    deadline,
+                    on_reasoning,
+                    should_stop,
                 )
             except LLMError as exc:
                 failures.append("%s: %s" % (name, exc) if len(targets) > 1 else str(exc))
@@ -221,6 +232,7 @@ class LLM:
         attempts: int,
         deadline: float,
         on_reasoning: Optional[Callable[[str], None]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> Reply:
         started = time.monotonic()
         first_word: List[float] = []
@@ -233,8 +245,12 @@ class LLM:
 
         last: Optional[_Retry] = None
         for attempt in range(attempts):
+            if should_stop and should_stop():
+                raise LLMError("Stopped at your request.")
             try:
-                reply = self._stream(url, api_key, name, messages, tools, temperature, relay, on_reasoning)
+                reply = self._stream(
+                    url, api_key, name, messages, tools, temperature, relay, on_reasoning, should_stop
+                )
                 now = time.monotonic()
                 waited = "%.1fs to first word" % (first_word[0] - started) if first_word else "no words streamed"
                 _log(
@@ -272,6 +288,7 @@ class LLM:
         temperature: float,
         on_token: Optional[Callable[[str], None]],
         on_reasoning: Optional[Callable[[str], None]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> Reply:
         payload: Dict[str, Any] = {
             "model": model,
@@ -286,13 +303,13 @@ class LLM:
         if mode:
             payload["thinking"] = {"type": mode}
         try:
-            return self._post(url, api_key, payload, on_token, on_reasoning)
+            return self._post(url, api_key, payload, on_token, on_reasoning, should_stop)
         except _ThinkingRejected:
             # GLM-5.3 and its flash sibling refuse to run without thinking. An
             # answer with the vendor's default beats an error about a switch.
             payload.pop("thinking", None)
             _log("%s refuses thinking=disabled, continuing with its default" % model)
-            return self._post(url, api_key, payload, on_token, on_reasoning)
+            return self._post(url, api_key, payload, on_token, on_reasoning, should_stop)
 
     def _post(
         self,
@@ -301,6 +318,7 @@ class LLM:
         payload: Dict[str, Any],
         on_token: Optional[Callable[[str], None]],
         on_reasoning: Optional[Callable[[str], None]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> Reply:
         request = urllib.request.Request(
             url,
@@ -328,6 +346,10 @@ class LLM:
                         response.read().decode("utf-8", "replace"), on_token, on_reasoning
                     )
                 for raw_line in response:
+                    if should_stop and should_stop():
+                        # The phone pressed Stop: keep what already streamed and
+                        # close the connection instead of generating the rest.
+                        break
                     line = raw_line.decode("utf-8", "replace").strip()
                     if not line or line.startswith(":") or not line.startswith("data:"):
                         continue

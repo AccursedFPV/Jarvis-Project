@@ -94,7 +94,8 @@ INDEX_HTML = """<!doctype html>
   #text::placeholder { color: #55616f; }
   #text:focus { outline: none; border-color: #24405f; }
   #send { padding: 0 14px; height: 38px; font-size: 13px; border: 0; border-radius: 11px;
-          background: var(--accent); color: #fff; font-weight: 500; }
+          background: var(--accent); color: #fff; font-weight: 500; min-width: 62px; }
+  #send.stop { background: #b3261e; }
   #talk { width: 100%; padding: 9px; margin-bottom: 6px; font-size: 13.5px; font-weight: 600;
           border: 1px solid var(--line); border-radius: 11px; background: var(--surface-2);
           color: var(--text); letter-spacing: .02em; touch-action: none;
@@ -173,6 +174,9 @@ const chatlist = document.getElementById("chatlist");
 let chatId = localStorage.getItem("jarvis_chat") || "";
 let pending = [];
 let sending = false;
+let stopping = false;
+let activeTurn = "";
+let controller = null;
 
 let statusBase = "connecting...";
 let statusAt = Date.now();
@@ -390,10 +394,36 @@ function thinkingPanel() {
   log.scrollTop = log.scrollHeight;
   return { panel: panel, head: head, body: body, steps: steps };
 }
+function setSendMode(mode) {
+  const el = document.getElementById("send");
+  if (!el) return;
+  el.textContent = mode === "stop" ? "Stop" : "Send";
+  el.classList.toggle("stop", mode === "stop");
+  // While a turn runs the button has to stay pressable: it is the brake.
+  if (mode === "stop") el.disabled = false;
+}
+async function stopTurn() {
+  if (!sending || stopping) return;
+  stopping = true;
+  setStatus("stopping...");
+  document.getElementById("send").disabled = true;
+  try {
+    await fetch("/cancel", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify({ turn: activeTurn })
+    });
+  } catch (error) { /* the abort below still frees the page */ }
+  if (controller) controller.abort();
+}
 async function send(message) {
   if (sending) return;
   sending = true;
+  stopping = false;
+  activeTurn = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+  controller = new AbortController();
   setLocked(true);
+  setSendMode("stop");
   const files = pending.slice();
   pending = [];
   renderTray();
@@ -441,7 +471,8 @@ async function send(message) {
     const response = await fetch("/chat", {
       method: "POST",
       headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
-      body: JSON.stringify({ message: message, chat: chatId, stream: true, files: files.map(function (item) { return { name: item.name, kind: item.kind }; }) })
+      signal: controller.signal,
+      body: JSON.stringify({ message: message, chat: chatId, stream: true, turn: activeTurn, files: files.map(function (item) { return { name: item.name, kind: item.kind }; }) })
     });
     if (response.status === 401) { localStorage.removeItem("jarvis_token"); throw new Error("Wrong or missing token."); }
     if (!response.ok || !response.body) {
@@ -464,21 +495,36 @@ async function send(message) {
     }
     if (failure) throw failure;
     setStatus("ready");
-  } catch (error) { fail(error.message); }
+  } catch (error) {
+    if (stopping || error.name === "AbortError") {
+      if (answer && !answer.textContent.trim()) answer.textContent = "(stopped)";
+      const note = document.createElement("div");
+      note.className = "meta";
+      note.textContent = "stopped";
+      log.appendChild(note);
+      log.scrollTop = log.scrollHeight;
+      setStatus("ready");
+    } else { fail(error.message); }
+  }
   finally {
     if (!view.body.textContent && !view.steps.children.length) view.panel.remove();
     sending = false;
+    stopping = false;
+    activeTurn = "";
+    controller = null;
+    setSendMode("send");
     setLocked(false);
   }
 }
 document.getElementById("send").onclick = function () {
+  if (sending) { stopTurn(); return; }
   const value = textInput.value.trim();
   if (!value && !pending.length) return;
   textInput.value = "";
   send(value);
 };
 textInput.addEventListener("keydown", function (event) {
-  if (event.key === "Enter") { event.preventDefault(); document.getElementById("send").click(); }
+  if (event.key === "Enter" && !sending) { event.preventDefault(); document.getElementById("send").click(); }
 });
 document.getElementById("chats").onclick = function () { toggleDrawer(true); };
 shade.onclick = function () { toggleDrawer(false); };
@@ -760,6 +806,8 @@ class JarvisServer(ThreadingHTTPServer):
         self.ui = ui
         self.token = token
         self.lock = threading.Lock()
+        # One event per running turn, so /cancel can stop that turn mid-stream.
+        self.cancels: Dict[str, threading.Event] = {}
         self._transcriber = transcriber
         self.chats = Chats(state_dir() / "chats")
         self.uploads = state_dir() / "uploads"
@@ -779,6 +827,7 @@ class JarvisServer(ThreadingHTTPServer):
         on_reasoning: Any = None,
         on_step: Any = None,
         on_token: Any = None,
+        should_stop: Any = None,
     ) -> Any:
         # One reply at a time: a second message would otherwise queue silently
         # behind a slow one and look like nothing is happening.
@@ -805,6 +854,7 @@ class JarvisServer(ThreadingHTTPServer):
                 on_reasoning=on_reasoning,
                 on_step=on_step,
                 on_token=on_token,
+                should_stop=should_stop,
             )
             self.chats.append(data, {"role": "user", "text": message, "files": files or []})
             self.chats.append(data, {"role": "assistant", "text": reply})
@@ -1013,6 +1063,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"id": data["id"], "title": data["title"]})
             return
 
+        if parts.path == "/cancel":
+            try:
+                payload = json.loads(self._body().decode("utf-8", "replace") or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            turn = str(payload.get("turn") or "")[:64] if isinstance(payload, dict) else ""
+            event = self.server.cancels.get(turn) if turn else None
+            if event is not None:
+                event.set()
+            self._json(200, {"cancelled": event is not None})
+            return
+
         if parts.path == "/chat":
             raw = self._body()
             try:
@@ -1022,6 +1084,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             message = str(payload.get("message") or "").strip()[:MAX_MESSAGE]
             chat_id = str(payload.get("chat") or "")[:80]
+            turn = str(payload.get("turn") or "")[:64]
             files = []
             supplied = payload.get("files")
             if isinstance(supplied, list):
@@ -1062,6 +1125,9 @@ class Handler(BaseHTTPRequestHandler):
                 # Events, one JSON object per line: think (chain of thought),
                 # step (a tool being used), say (answer text), done, error.
                 self._start_stream()
+                cancel = threading.Event()
+                if turn:
+                    self.server.cancels[turn] = cancel
                 try:
                     reply, chat_id = self.server.chat(
                         message,
@@ -1072,11 +1138,15 @@ class Handler(BaseHTTPRequestHandler):
                         on_reasoning=lambda text: self._event({"t": "think", "d": text}),
                         on_step=lambda text: self._event({"t": "step", "d": text}),
                         on_token=lambda text: self._event({"t": "say", "d": text}),
+                        should_stop=cancel.is_set if turn else None,
                     )
                 except Exception as exc:
                     self._event({"t": "error", "d": self._failure("chat", exc)})
                     self._end_stream()
                     return
+                finally:
+                    if turn:
+                        self.server.cancels.pop(turn, None)
                 self._event({"t": "done", "reply": reply, "chat": chat_id})
                 self._end_stream()
                 return
