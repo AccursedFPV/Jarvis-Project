@@ -37,6 +37,7 @@ APPROVAL_REQUIRED = {
     "launch_app",
     "write_skill",
     "delete_skill",
+    "restart_self",
 }
 
 
@@ -198,6 +199,11 @@ TOOLS: List[Dict[str, Any]] = [
         "Delete a skill you wrote earlier.",
         {"name": {"type": "string", "description": "Skill name without the skill_ prefix."}},
         ["name"],
+    ),
+    _tool(
+        "restart_self",
+        "Restart the Jarvis server so changes you made to your own code take effect. Your reply is sent first.",
+        {},
     ),
     _tool(
         "learn",
@@ -751,6 +757,29 @@ class Toolbox:
         if self.skills is None:
             return "ERROR: skill storage is not available in this session."
         return self.skills.delete(name)
+
+    def restart_self(self, **_: Any) -> str:
+        """Restart the service this process runs under, once this reply is sent."""
+        if not Path("/run/systemd/system").is_dir():
+            return "ERROR: not running under systemd - restart it however you started me."
+        script = (
+            "sleep 2; "
+            "sudo -n systemctl restart jarvis-serve 2>/dev/null || "
+            "systemctl restart jarvis-serve"
+        )
+        try:
+            subprocess.Popen(
+                ["sh", "-c", script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            return "ERROR: could not schedule the restart: %s" % exc
+        return (
+            "Restarting in 2 seconds. If I do not come back, the new code fails to import - "
+            "see: journalctl -u jarvis-serve -n 30"
+        )
 
     def learn(self, text: str = "", **_: Any) -> str:
         if self.learnings is None:

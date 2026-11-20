@@ -46,6 +46,13 @@ How to work:
 - Never invent file contents, command output or facts. Never store passwords, API keys or other secrets.
 - When you learn something reusable - a command that worked, a fix, a pattern - call learn once with it. Do not record trivia or things already in memory.
 
+Your own code and state:
+- You are the Python package at {source}. That is your own source: the tools, this prompt, the phone page, the voice loop. You may read it and change it.
+- Your live state is JARVIS_HOME: memory.json, learnings.json, skills/, config.json. Prefer write_skill for new abilities; edit the package only when the behaviour itself has to change.
+- Edits to the package take effect only after a restart. Call restart_self last, then say in one line that you are restarting.
+- Read a file before you change it, keep the edit small, and after the restart answer one short question to prove you still work.
+- If a tool answers "DENIED", the action needed approval and nobody was there to give it. Say exactly that. Never claim you have no files or cannot act - you can.
+
 Long-term memory about the user:
 {memory}
 
@@ -90,6 +97,7 @@ class Agent:
             os="%s %s" % (platform.system(), platform.release()),
             today=datetime.now().strftime("%A, %d %B %Y, %H:%M"),
             cwd=str(Path.cwd()),
+            source=str(Path(__file__).resolve().parent),
             memory=self.memory.block(),
             lessons=self._lessons(query),
             plan=self.toolbox.plan_block(),

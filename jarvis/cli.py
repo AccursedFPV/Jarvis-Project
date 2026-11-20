@@ -17,6 +17,7 @@ from .config import (
     api_key,
     api_key_source,
     apply_env_overrides,
+    auto_approve_env,
     config_file,
     is_local_url,
     llm_timeout,
@@ -479,7 +480,10 @@ def _run_server(agent: Agent, ui: UI, config: Config, host: Optional[str], port:
     ui.info("Phone: http://%s:%d/?token=%s" % (shown, number, token))
     ui.info("Token is also saved in %s" % (state_dir() / "server_token"))
     ui.info("From anywhere: run Tailscale on this PC and the phone, then use the PC's Tailscale name.")
-    ui.info("Risky actions still ask for approval in this terminal (or start with -y).")
+    if agent.toolbox.auto_approve:
+        ui.warn("Risky actions run without asking: anyone with the token can use this shell.")
+    else:
+        ui.info("Risky actions are refused here - no one is at a terminal to approve them.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -524,8 +528,10 @@ def main(argv: Optional[list] = None) -> int:
     memory = Memory(memory_file())
     toolbox = Toolbox(
         memory=memory,
-        approve=_prompt_for_approval(ui),
-        auto_approve=config.auto_approve or args.yes,
+        # A server has no terminal to answer the prompt, so in that mode the
+        # question is either auto-approved (JARVIS_AUTO_APPROVE=1) or refused.
+        approve=None if args.serve else _prompt_for_approval(ui),
+        auto_approve=config.auto_approve or args.yes or auto_approve_env(),
         skills=Skills(state_dir() / "skills"),
         learnings=Learnings(state_dir() / "learnings.json"),
     )

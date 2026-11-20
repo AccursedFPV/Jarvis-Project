@@ -104,6 +104,18 @@ def apply_env_overrides(config: Config) -> Config:
     return config
 
 
+def auto_approve_env() -> bool:
+    """JARVIS_AUTO_APPROVE=1 lets a headless server approve risky actions itself.
+
+    Without it, a server has nobody at a terminal to answer the approval prompt,
+    so write_file and run_command are refused and Jarvis cannot change its own
+    code. Off by default: with it on, anyone holding the server token can use
+    this shell.
+    """
+    raw = os.environ.get("JARVIS_AUTO_APPROVE", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def api_key() -> Optional[str]:
     for name in API_KEY_ENV_VARS:
         value = os.environ.get(name, "").strip()

@@ -69,6 +69,10 @@ JARVIS_BASE_URL=https://api.z.ai/api/paas/v4
 JARVIS_MODEL=glm-4.7-flash
 # give up on a slow/unreachable model quickly so the phone is not left waiting
 JARVIS_LLM_TIMEOUT=90
+# Set to 1 so the server approves risky actions itself (writing files, running
+# commands) - needed before it can edit its own code from the phone. Leave it at
+# 0 and those actions are refused, because nobody is at the terminal to approve.
+JARVIS_AUTO_APPROVE=0
 PYTHONUNBUFFERED=1
 EOF
     chmod 600 "$ENV_FILE"
@@ -85,6 +89,18 @@ echo "==> installing the systemd service"
 install -m 644 "$APP_DIR/contrib/jarvis-serve.service" /etc/systemd/system/jarvis-serve.service
 systemctl daemon-reload
 systemctl enable --now jarvis-serve >/dev/null
+
+# restart_self needs one narrow root permission, and only for this unit.
+echo "==> letting Jarvis restart itself after it edits its own code"
+SYSTEMCTL="$(command -v systemctl || echo /usr/bin/systemctl)"
+SUDOERS="/etc/sudoers.d/jarvis-restart"
+printf '%s ALL=(root) NOPASSWD: %s restart jarvis-serve, %s status jarvis-serve\n' \\
+    "$SERVICE_USER" "$SYSTEMCTL" "$SYSTEMCTL" > "$SUDOERS"
+chmod 440 "$SUDOERS"
+if ! visudo -cf "$SUDOERS" >/dev/null 2>&1; then
+    rm -f "$SUDOERS"
+    echo "    (the sudoers rule did not validate - skipped; restart_self will be unavailable)"
+fi
 
 echo "==> firewall: SSH open, $PORT only over Tailscale"
 ufw allow OpenSSH >/dev/null 2>&1 || true
