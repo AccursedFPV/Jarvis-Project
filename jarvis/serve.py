@@ -87,6 +87,9 @@ INDEX_HTML = """<!doctype html>
   .chat b { display: block; font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chat small { color: #8b949e; font-size: 11px; }
   .chat.active { border-color: #1f6feb; }
+  .chat { display: flex; align-items: center; gap: 8px; }
+  .chat .text { flex: 1; min-width: 0; }
+  .del { background: none; border: 0; color: #8b949e; font-size: 17px; padding: 2px 6px; line-height: 1; }
   #shade { position: fixed; inset: 0; background: #000a; display: none; z-index: 4; }
   #shade.open { display: block; }
 </style>
@@ -189,13 +192,25 @@ async function loadChats() {
     data.chats.forEach(function (item) {
       const row = document.createElement("div");
       row.className = "chat" + (item.id === chatId ? " active" : "");
+      const body = document.createElement("div");
+      body.className = "text";
       const title = document.createElement("b");
       title.textContent = item.title;
       const meta = document.createElement("small");
       meta.textContent = item.when + " - " + item.count + " messages";
-      row.appendChild(title);
-      row.appendChild(meta);
-      row.onclick = function () { openChat(item.id); toggleDrawer(false); };
+      body.appendChild(title);
+      body.appendChild(meta);
+      body.onclick = function () { openChat(item.id); toggleDrawer(false); };
+      const remove = document.createElement("button");
+      remove.className = "del";
+      remove.textContent = "x";
+      remove.setAttribute("aria-label", "Delete chat");
+      remove.onclick = function (event) {
+        event.stopPropagation();
+        deleteChat(item.id, item.title);
+      };
+      row.appendChild(body);
+      row.appendChild(remove);
       chatlist.appendChild(row);
     });
   } catch (error) { setStatus("offline"); }
@@ -210,6 +225,19 @@ async function openChat(id) {
     data.messages.forEach(renderMessage);
     log.scrollTop = log.scrollHeight;
     setStatus("ready");
+  } catch (error) { fail(error.message); }
+}
+async function deleteChat(id, title) {
+  if (!confirm('Delete "' + title + '"?')) return;
+  try {
+    await api("/chats/" + encodeURIComponent(id), { method: "DELETE" });
+    if (id === chatId) {
+      chatId = "";
+      localStorage.removeItem("jarvis_chat");
+      log.innerHTML = "<div class='meta'>Hold the button and talk, or type.</div>";
+      setStatus("ready");
+    }
+    loadChats();
   } catch (error) { fail(error.message); }
 }
 function renderTray() {
@@ -485,6 +513,16 @@ class Chats:
 
     def load(self, chat_id: str) -> Optional[dict]:
         return self._read(chat_id)
+
+    def delete(self, chat_id: str) -> bool:
+        path = self._file(chat_id)
+        if not (chat_id and path.is_file()):
+            return False
+        try:
+            path.unlink()
+        except OSError:
+            return False
+        return True
 
     def listing(self) -> list:
         items = []
@@ -780,6 +818,22 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"heard": heard, "reply": reply, "chat": chat_id})
             return
 
+        self._json(404, {"error": "not found"})
+
+    # ------------------------------------------------------------------ DELETE
+
+    def do_DELETE(self) -> None:
+        parts = urlsplit(self.path)
+        query = parse_qs(parts.query)
+        if not self._authorised(query):
+            self._json(401, {"error": "unauthorised - send Authorization: Bearer <token>"})
+            return
+        if parts.path.startswith("/chats/"):
+            if self.server.chats.delete(parts.path.split("/", 2)[2]):
+                self._json(200, {"deleted": True})
+            else:
+                self._json(404, {"error": "no such chat"})
+            return
         self._json(404, {"error": "not found"})
 
     def log_message(self, format: str, *args: Any) -> None:
