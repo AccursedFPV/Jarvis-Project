@@ -184,6 +184,33 @@ class Agent:
 
                 if not reply.tool_calls:
                     text = (reply.content or "").strip()
+                    # Some providers serialise a tool call into the text stream
+                    # (<arg_key>...). That is not an answer, and showing it is
+                    # worse than useless.
+                    if _leaked_call(text):
+                        self.history.pop()
+                        if not nudged:
+                            nudged = True
+                            self._nudge = (
+                                "Your previous message was a tool call written out as text, which is "
+                                "not a tool call and did nothing. Do not write tool syntax or tags. "
+                                "Either call the tool properly with its arguments, or answer in plain "
+                                "language. Never claim a tool failed when you have not called it."
+                            )
+                            continue
+                        cleaned = _strip_leaked(text)
+                        return cleaned if cleaned and not _claims_failure(cleaned) else _GARBLED
+                    # Claiming a tool is broken without having tried it is a
+                    # wish, so it is handed back once with a real instruction.
+                    if steps == 0 and _claims_failure(text) and not nudged:
+                        self.history.pop()
+                        nudged = True
+                        self._nudge = (
+                            "You have not called any tool this turn, so you cannot know that one is "
+                            "failing: %r. If the request needs the web, call web_search now with real "
+                            "search words. If it does not, answer from what you already know." % text[:200]
+                        )
+                        continue
                     # A promise is not an answer, so a promise on a turn that has
                     # not acted yet is handed back once with the words quoted.
                     if _announces(text):
@@ -269,6 +296,39 @@ _GAVE_UP = (
     "I stopped myself there: I kept repeating the same step without getting anywhere. "
     "Ask me again, or tell me exactly what you want me to do."
 )
+
+_GARBLED = (
+    "That came out garbled on my side - I wrote a tool call as text instead of running it. "
+    "Ask me again and I will try once more."
+)
+
+# Tool syntax some models put in the text instead of in tool_calls.
+LEAKED_CALL = re.compile(
+    r"</?(arg_key|arg_value|tool_call|tool_calls|function_call|tool_name|parameters)\b[^>]*>",
+    re.IGNORECASE,
+)
+
+FAILURE_CLAIM = re.compile(
+    r"\b(tool|search|search engine|web)\b[^.!?]{0,60}"
+    r"\b(fail|fails|failing|failed|broken|not working|unavailable|error|errors)\b",
+    re.IGNORECASE,
+)
+
+
+def _leaked_call(text: str) -> bool:
+    """True when a reply contains tool-call markup instead of a real call."""
+    return bool(LEAKED_CALL.search(text or ""))
+
+
+def _claims_failure(text: str) -> bool:
+    """True when a reply says a tool is broken without any tool having run."""
+    return bool(FAILURE_CLAIM.search(" ".join((text or "").split())))
+
+
+def _strip_leaked(text: str) -> str:
+    """Drop the lines that carry leaked tool markup, keep the prose."""
+    lines = [line for line in (text or "").splitlines() if not LEAKED_CALL.search(line)]
+    return "\n".join(lines).strip()
 
 PROMISE = re.compile(
     r"^\W*(sure[,!]?\s*)?(i'?ll|i will|i am going to|i'm going to|i shall|let me|allow me)\b",
