@@ -31,7 +31,7 @@ fail() { echo "error: $*" >&2; exit 1; }
 echo "==> installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip ufw ca-certificates >/dev/null
+apt-get install -y -qq python3 python3-venv python3-pip git ufw ca-certificates >/dev/null
 
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
     echo "==> creating the $SERVICE_USER user"
@@ -79,6 +79,21 @@ EOF
     echo "    a new token was generated - see: grep TOKEN $ENV_FILE"
 else
     echo "    keeping the existing $ENV_FILE"
+fi
+
+# A local-only history for the code. No remote is configured and no credentials
+# live on this machine, so anything Jarvis changes about itself can be undone -
+# and rolled back automatically if it will not start - without leaving the box.
+echo "==> creating a local code history (no remote, no credentials)"
+if [ -d "$APP_DIR/jarvis" ]; then
+    if [ ! -d "$APP_DIR/.git" ]; then
+        printf '.venv/\n__pycache__/\n*.egg-info/\n' > "$APP_DIR/.gitignore"
+        git -C "$APP_DIR" init -q
+    fi
+    git -C "$APP_DIR" config user.email "jarvis@localhost"
+    git -C "$APP_DIR" config user.name "Jarvis"
+    git -C "$APP_DIR" add -A
+    git -C "$APP_DIR" commit -qm "baseline: deploy/vps-install.sh" 2>/dev/null || true
 fi
 
 mkdir -p "$STATE_DIR"

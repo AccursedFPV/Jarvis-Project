@@ -9,6 +9,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -202,7 +203,9 @@ TOOLS: List[Dict[str, Any]] = [
     ),
     _tool(
         "restart_self",
-        "Restart the Jarvis server so changes you made to your own code take effect. Your reply is sent first.",
+        "Restart the Jarvis server so changes you made to your own code take effect. Your reply is sent "
+        "first. The current code is committed to a local-only history and rolled back if the new "
+        "version will not start.",
         {},
     ),
     _tool(
@@ -303,6 +306,43 @@ def _relative(path: Path, base: Path) -> str:
         return str(path.relative_to(base))
     except ValueError:
         return str(path)
+
+
+def _commit_source(root: Path, note: str = "") -> str:
+    """Commit the running source to its local-only history and return the revision.
+
+    There is deliberately no remote and no credential on this machine: the
+    history exists so a change to Jarvis's own code can be undone, and so a bad
+    version can be rolled back automatically. Returns "" when there is nothing
+    to commit or git is unavailable.
+    """
+    if not (root / "pyproject.toml").is_file() or shutil.which("git") is None:
+        return ""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_AUTHOR_NAME="Jarvis", GIT_AUTHOR_EMAIL="jarvis@localhost")
+
+    def git(*args: str):
+        return subprocess.run(
+            ["git", "-C", str(root)] + list(args),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    try:
+        if not (root / ".git").is_dir():
+            git("init", "-q")
+            git("config", "user.email", "jarvis@localhost")
+            git("config", "user.name", "Jarvis")
+        paths = [name for name in ("jarvis", "contrib", "deploy", "pyproject.toml", "README.md") if (root / name).exists()]
+        git("add", "-A", "--", *paths)
+        if not (git("status", "--porcelain").stdout or "").strip():
+            return ""
+        message = "jarvis: %s" % (note or datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        if git("commit", "-qm", message).returncode != 0:
+            return ""
+        return (git("rev-parse", "--short", "HEAD").stdout or "").strip()
+    except OSError:
+        return ""
 
 
 def _is_url(text: str) -> bool:
@@ -759,13 +799,20 @@ class Toolbox:
         return self.skills.delete(name)
 
     def restart_self(self, **_: Any) -> str:
-        """Restart the service this process runs under, once this reply is sent."""
+        """Commit the source, restart the service, and roll back if it will not start."""
         if not Path("/run/systemd/system").is_dir():
             return "ERROR: not running under systemd - restart it however you started me."
+        root = Path(__file__).resolve().parent.parent
+        commit = _commit_source(root, "before restart")
+        start = "sudo -n systemctl restart jarvis-serve 2>/dev/null || systemctl restart jarvis-serve"
+        rollback = "git -C %s reset --hard HEAD~1" % shlex.quote(str(root))
         script = (
-            "sleep 2; "
-            "sudo -n systemctl restart jarvis-serve 2>/dev/null || "
-            "systemctl restart jarvis-serve"
+            "sleep 2; " + start + "; "
+            # Restart=always keeps retrying a broken import, so give it a window
+            # to come up, then put the previous commit back.
+            "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do sleep 2; "
+            "systemctl is-active --quiet jarvis-serve && exit 0; done; "
+            + rollback + " >/dev/null 2>&1 && " + start
         )
         try:
             subprocess.Popen(
@@ -776,9 +823,10 @@ class Toolbox:
             )
         except OSError as exc:
             return "ERROR: could not schedule the restart: %s" % exc
+        kept = " Code committed as %s." % commit if commit else ""
         return (
-            "Restarting in 2 seconds. If I do not come back, the new code fails to import - "
-            "see: journalctl -u jarvis-serve -n 30"
+            "Restarting in 2 seconds.%s If the new version will not start, I roll back one commit "
+            "and restart the previous one. Check with: journalctl -u jarvis-serve -n 30" % kept
         )
 
     def learn(self, text: str = "", **_: Any) -> str:
