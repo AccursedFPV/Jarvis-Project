@@ -14,7 +14,15 @@ from typing import Any, Callable, Dict, List, Optional
 
 
 class LLMError(RuntimeError):
-    """The model API is unreachable, misconfigured or returned an error."""
+    """The model API is unreachable, misconfigured or returned an error.
+
+    capacity marks a problem on the provider's side - congestion, a rate limit,
+    a 5xx - which another model or provider may not share. A rejected key or an
+    unknown model name is ours, and trying elsewhere would only hide it.
+    """
+
+    capacity = False
+    partial = False
 
 
 @dataclass
@@ -43,21 +51,51 @@ def _budget() -> float:
 
 
 class _Retry(Exception):
-    def __init__(self, message: str, partial: bool = False, wait: Optional[float] = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        partial: bool = False,
+        wait: Optional[float] = None,
+        capacity: bool = True,
+    ) -> None:
         super().__init__(message)
         self.partial = partial
         self.wait = wait
+        self.capacity = capacity
+
+
+def _completions_url(base_url: str) -> str:
+    url = (base_url or "").rstrip("/")
+    if not url.endswith("/chat/completions"):
+        url += "/chat/completions"
+    return url
 
 
 class LLM:
-    def __init__(self, api_key: str, base_url: str, model: str, timeout: float = 180.0) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        timeout: float = 180.0,
+        fallbacks: Optional[List[Any]] = None,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
-        url = base_url.rstrip("/")
-        if not url.endswith("/chat/completions"):
-            url += "/chat/completions"
-        self.url = url
+        self.url = _completions_url(base_url)
+        # (url, api_key, model) tried in order when the one before it is
+        # congested. Same provider or a different one; Jarvis does not care.
+        self.fallbacks: List[Any] = []
+        for item in fallbacks or []:
+            try:
+                base, key, name = item[0], item[1], item[2]
+            except (TypeError, IndexError, KeyError):
+                continue
+            name = str(name or "").strip()
+            if not name:
+                continue
+            self.fallbacks.append((_completions_url(str(base)), str(key or "") or api_key, name))
 
     def chat(
         self,
@@ -67,13 +105,49 @@ class LLM:
         on_token: Optional[Callable[[str], None]] = None,
         model: Optional[str] = None,
     ) -> Reply:
-        attempts = 4
         budget = _budget()
-        deadline = time.monotonic() + budget
+        started = time.monotonic()
+        deadline = started + budget
+        # Retrying a congested host four times is time the fallback could spend
+        # answering, so the primary only retries when there is nothing to fall
+        # back to.
+        primary_attempts = 2 if self.fallbacks else 4
+        targets = [(self.url, self.api_key, model or self.model, primary_attempts)]
+        for base, key, name in self.fallbacks:
+            targets.append((base, key, name, 2))
+
+        failures: List[str] = []
+        for index, (url, key, name, attempts) in enumerate(targets):
+            if index and time.monotonic() >= deadline:
+                failures.append("%s: no time left" % name)
+                break
+            try:
+                return self._with_retries(url, key, name, messages, tools, temperature, on_token, attempts, deadline)
+            except LLMError as exc:
+                failures.append("%s: %s" % (name, exc) if len(targets) > 1 else str(exc))
+                # Only someone else's congestion is worth another target, and a
+                # reply already appearing on the phone cannot be restarted.
+                if not exc.capacity or exc.partial:
+                    break
+        detail = " | ".join(failures) if failures else "The model request failed."
+        raise LLMError("%s (gave up after %.0fs)" % (_short(detail, 600), time.monotonic() - started))
+
+    def _with_retries(
+        self,
+        url: str,
+        api_key: str,
+        name: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]],
+        temperature: float,
+        on_token: Optional[Callable[[str], None]],
+        attempts: int,
+        deadline: float,
+    ) -> Reply:
         last: Optional[_Retry] = None
         for attempt in range(attempts):
             try:
-                return self._stream(messages, tools, temperature, on_token, model)
+                return self._stream(url, api_key, name, messages, tools, temperature, on_token)
             except _Retry as exc:
                 last = exc
                 if exc.partial or attempt == attempts - 1:
@@ -86,22 +160,26 @@ class LLM:
                     # for minutes, so give up while the reason is still fresh.
                     break
                 time.sleep(max(0.0, min(delay, 30.0)))
-        detail = str(last) if last else "The model request failed."
-        spent = time.monotonic() - deadline + budget
-        raise LLMError("%s (gave up after %.0fs)" % (detail, spent))
+        error = LLMError(str(last) if last else "The model request failed.")
+        if last is not None:
+            error.capacity = last.capacity
+            error.partial = last.partial
+        raise error
 
     # ------------------------------------------------------------------ stream
 
     def _stream(
         self,
+        url: str,
+        api_key: str,
+        model: str,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]],
         temperature: float,
         on_token: Optional[Callable[[str], None]],
-        model: Optional[str] = None,
     ) -> Reply:
         payload: Dict[str, Any] = {
-            "model": model or self.model,
+            "model": model,
             "messages": messages,
             "stream": True,
             "temperature": temperature,
@@ -111,12 +189,12 @@ class LLM:
             payload["tool_choice"] = "auto"
 
         request = urllib.request.Request(
-            self.url,
+            url,
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream",
-                "Authorization": "Bearer " + self.api_key,
+                "Authorization": "Bearer " + api_key,
                 "User-Agent": "jarvis-cli/0.1",
             },
             method="POST",
@@ -175,11 +253,15 @@ class LLM:
             detail = _read_error_body(exc)
             message = _http_error_message(exc.code, detail)
             if exc.code == 429 or exc.code >= 500:
-                raise _Retry(message, wait=_retry_after(exc.headers)) from exc
+                raise _Retry(message, wait=_retry_after(exc.headers), capacity=True) from exc
             raise LLMError(message) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             reason = getattr(exc, "reason", exc)
-            raise _Retry("Could not reach the model API at %s: %s" % (self.url, reason), partial=emitted) from exc
+            raise _Retry(
+                "Could not reach the model API at %s: %s" % (url, reason),
+                partial=emitted,
+                capacity=True,
+            ) from exc
 
         return Reply(
             content="".join(content_parts),

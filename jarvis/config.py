@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
@@ -148,6 +148,44 @@ def resolve_base_url(config: Config) -> str:
 def resolve_model(config: Config) -> str:
     value = os.environ.get("JARVIS_MODEL", "").strip()
     return value or config.model
+
+
+def fallback_models() -> List[str]:
+    """Models to try, in order, when the first one is congested.
+
+    Comma-separated JARVIS_FALLBACK_MODELS. Usually other models on the same
+    provider, whose capacity is pooled separately (z.ai answers 1305 when one
+    model is saturated while its neighbours still serve).
+    """
+    raw = os.environ.get("JARVIS_FALLBACK_MODELS", "").strip()
+    if not raw:
+        return []
+    parts = raw.replace(";", ",").replace(" ", ",").split(",")
+    return [part for part in (piece.strip() for piece in parts) if part]
+
+
+def fallback_provider() -> Optional[Tuple[str, str, str]]:
+    """A second OpenAI-compatible endpoint for when the first provider is down.
+
+    JARVIS_FALLBACK_BASE_URL + JARVIS_FALLBACK_MODEL (+ optional
+    JARVIS_FALLBACK_API_KEY) point at something like Groq or Gemini's
+    compatibility API. Inactive until both a URL and a model are set.
+    """
+    base = os.environ.get("JARVIS_FALLBACK_BASE_URL", "").strip()
+    name = os.environ.get("JARVIS_FALLBACK_MODEL", "").strip()
+    if not (base and name):
+        return None
+    key = os.environ.get("JARVIS_FALLBACK_API_KEY", "").strip()
+    return (base, key, name)
+
+
+def llm_fallbacks(base_url: str, key: str) -> List[Tuple[str, str, str]]:
+    """Fallback targets for the client, in the order they should be tried."""
+    targets: List[Tuple[str, str, str]] = [(base_url, key, name) for name in fallback_models()]
+    provider = fallback_provider()
+    if provider:
+        targets.append(provider)
+    return targets
 
 
 def llm_timeout() -> float:

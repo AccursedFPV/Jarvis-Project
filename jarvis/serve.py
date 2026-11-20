@@ -770,6 +770,7 @@ class Handler(BaseHTTPRequestHandler):
                     "version": __version__,
                     "model": self.server.agent.llm.model,
                     "endpoint": self.server.agent.llm.url,
+                    "fallbacks": [entry[2] for entry in self.server.agent.llm.fallbacks],
                     "skills": len(self.server.agent.toolbox.schemas()),
                 },
             )

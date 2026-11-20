@@ -20,6 +20,7 @@ from .config import (
     auto_approve_env,
     config_file,
     is_local_url,
+    llm_fallbacks,
     llm_timeout,
     load_config,
     memory_file,
@@ -524,7 +525,13 @@ def main(argv: Optional[list] = None) -> int:
     if is_local_url(base_url) and not _local_preflight(ui, base_url, model):
         return 1
 
-    llm = LLM(api_key=key, base_url=base_url, model=model, timeout=llm_timeout())
+    llm = LLM(
+        api_key=key,
+        base_url=base_url,
+        model=model,
+        timeout=llm_timeout(),
+        fallbacks=llm_fallbacks(base_url, key),
+    )
     memory = Memory(memory_file())
     toolbox = Toolbox(
         memory=memory,
