@@ -162,9 +162,12 @@ class Agent:
         offer_tools = True
         nudged = False
         empty_nudged = False
+        refused = 0
         stuck = False
         seen: Dict[str, int] = {}
         per_tool: Dict[str, int] = {}
+        # Search words already used this turn, so a loop is visible.
+        searched: List[set] = []
         try:
             while True:
                 if stopped():
@@ -239,21 +242,42 @@ class Agent:
                             "search words. If it does not, answer from what you already know." % text[:200]
                         )
                         continue
-                    # A promise is not an answer, so a promise on a turn that has
-                    # not acted yet is handed back once with the words quoted.
-                    if _announces(text):
+                    # A promise is not an answer. Whether it had not acted yet or
+                    # had already searched and was planning more, it gets exactly
+                    # one chance to answer from what it has.
+                    if _announces(text) or (steps and _promises_more(text)):
                         self.history.pop()
-                        if not nudged and not steps:
+                        if not nudged:
                             nudged = True
+                            offer_tools = False
                             self._nudge = (
-                                "Your previous answer only announced an action: %r. "
-                                "If you meant to use a tool, call that tool now and give it its arguments. "
-                                "If no tool is needed, answer the question yourself. "
-                                "Never reply with only a promise." % text[:200]
+                                "Your last message announced or planned more work instead of "
+                                "answering: %r. Do not plan and do not call another tool. Answer now "
+                                "in plain language from what you already have, giving the real address "
+                                "of anything you recommend. If the results were useless, say so in one "
+                                "line and name what you searched for." % text[:200]
                             )
                             continue
                         return _GAVE_UP
                     return text
+
+                if not offer_tools:
+                    # Tools are closed for this turn - the budget ran out, a loop
+                    # was caught, or search is down. A call that still arrives is
+                    # refused, so the next message has to be the answer.
+                    refused += 1
+                    for call in reply.tool_calls:
+                        self.history.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call.id,
+                                "content": "ERROR: no more tools this turn. Answer from what you "
+                                "already have, with the links you found.",
+                            }
+                        )
+                    if refused > 2:
+                        return _GAVE_UP
+                    continue
 
                 if steps + len(reply.tool_calls) > _max_steps():
                     offer_tools = False
@@ -303,13 +327,34 @@ class Agent:
                         )
                         continue
                     args, parse_error = _parse_arguments(call.arguments)
-                    if parse_error:
+                    repeated = bool(
+                        not parse_error
+                        and call.name == "web_search"
+                        and _repeat_search(str(args.get("query") or ""), searched)
+                    )
+                    if repeated:
+                        # The same search with new filler words is the loop the
+                        # user watched: five near-identical queries, then nothing.
+                        stuck = True
+                        if on_step:
+                            on_step("skipped a search it already ran")
+                        result = (
+                            "ERROR: you have already searched for this in this turn. Do not search "
+                            "again: answer with the results above, giving their links, or say plainly "
+                            "that those results were not useful."
+                        )
+                    elif parse_error:
                         result = "ERROR: " + parse_error
                     else:
                         self.ui.tool(call.name, args)
                         if on_step:
                             on_step(_step_label(call.name, args))
                         result = self.toolbox.run(call.name, args)
+                        if call.name == "web_search":
+                            searched.append(_query_words(str(args.get("query") or "")))
+                            if result.startswith("Search is unavailable"):
+                                # Every engine refused, so another query cannot help.
+                                stuck = True
                     self.history.append({"role": "tool", "tool_call_id": call.id, "content": result})
                 if stuck:
                     # No tools from here on: the next reply has to be an answer.
@@ -383,6 +428,50 @@ def _announces(text: str) -> bool:
     if not body or len(body) > 320 or body.endswith("?"):
         return False
     return bool(PROMISE.match(body))
+
+
+# Five searches that differ only in filler ("best cheap gaming mouse amazon",
+# "best budget gaming mouse under 50", "best cheap gaming mouse 2024") are one
+# search. The model ran them in a row while the user watched, so they are cut.
+_QUERY_NOISE = re.compile(r"\b(19|20)\d\d\b")
+_QUERY_FILLER = {
+    "best", "cheap", "cheapest", "budget", "good", "great", "top", "under", "over",
+    "the", "and", "for", "with", "from", "amazon", "review", "reviews", "price",
+    "prices", "buy", "search", "find", "looking", "please", "dollars", "gbp", "usd",
+}
+
+_FOLLOW_UP = re.compile(
+    r"\b(i will|i'll|i am going to|i'm going to|let me|let's|lets)\b[^.!?]{0,60}"
+    r"\b(search|searching|check|checking|look|looking|try|trying|examine|fetch|find|"
+    r"browse|repeat|verify|investigate)\b",
+    re.IGNORECASE,
+)
+
+
+def _query_words(query: str) -> set:
+    """The words that decide whether two searches are the same one."""
+    words = re.findall(r"[a-z0-9]+", _QUERY_NOISE.sub(" ", (query or "").lower()))
+    return {word for word in words if len(word) > 2 and word not in _QUERY_FILLER}
+
+
+def _repeat_search(query: str, searched: List[set]) -> bool:
+    words = _query_words(query)
+    if not words:
+        return False
+    for previous in searched:
+        if not previous:
+            continue
+        if len(words & previous) / float(len(words | previous)) >= 0.7:
+            return True
+    return False
+
+
+def _promises_more(text: str) -> bool:
+    """True for a reply that plans the next step instead of giving the answer."""
+    body = " ".join((text or "").split())
+    if not body or "http" in body:
+        return False
+    return bool(_FOLLOW_UP.search(body))
 
 
 def _step_label(name: str, args: Dict[str, Any]) -> str:

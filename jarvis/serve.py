@@ -1105,6 +1105,7 @@ class Handler(BaseHTTPRequestHandler):
                     "endpoint": self.server.agent.llm.url,
                     "fallbacks": [entry[2] for entry in self.server.agent.llm.fallbacks],
                     "thinking": self.server.agent.llm.thinking or "vendor default",
+                    "search": "exa" if os.environ.get("EXA_API_KEY", "").strip() else "scrapers",
                     "skills": len(self.server.agent.toolbox.schemas()),
                 },
             )

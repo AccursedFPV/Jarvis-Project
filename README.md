@@ -324,6 +324,31 @@ The token is stored in the phone's local storage after the first load, so the UR
 - **Real "Hey Jarvis" on the phone needs an Android app.** A browser tab cannot listen in the background (and Android suspends the mic when the screen locks), so the web client is typed input with spoken replies, and the hold-to-talk microphone is parked for now. A small Android app with a foreground service could run the same `hey_jarvis` model on the phone and call this server — that is the next piece, and the API is already there for it (`POST /chat`, `POST /voice`, `GET /health`).
 - Your conversation and memory now travel over your private network to your own PC. Still yours, not a third party's.
 
+### Search that works from a server
+
+Search engines treat a datacenter address as a bot. From a Hetzner box DuckDuckGo answers with an "anomaly" page and Bing answers with *Best Buy* and a dictionary entry, so the only engine left was Wikipedia — which happily "answered" *best cheap gaming mouse on Amazon* with articles about Amazon Luna and a video game. That fallthrough is gone: a shopping query never reaches Wikipedia now, and an engine that fails is rested for ten minutes instead of costing fifteen seconds on every retry. An honest *search is down* is better than five junk searches.
+
+For search that actually works from the VPS, give it a key. Exa's free tier is about 2,800 searches, then $10 of credit a month, no card: <https://exa.ai>.
+
+1. Create the key, then put it in the service (never in a file in this repo):
+
+   ```bash
+   sudo mkdir -p /etc/systemd/system/jarvis-serve.service.d
+   sudo tee /etc/systemd/system/jarvis-serve.service.d/search.conf >/dev/null <<'EOF'
+   [Service]
+   Environment="EXA_API_KEY=paste-your-key-here"
+   EOF
+   sudo systemctl daemon-reload && sudo systemctl restart jarvis-serve
+   ```
+
+2. Prove it from the box:
+
+   ```bash
+   jarvis search "best earbuds"
+   ```
+
+   The `engine` line must say `exa`, and `curl /health` now reports `"search": "exa"` instead of `"scrapers"`.
+
 ### Run it on a VPS instead
 
 While your own PC is unavailable, a small VPS can run Jarvis itself — the agent, tools, memory, skills and the phone API. It cannot run the model: a $7–10/month server has no GPU. Use a free-tier API for the thinking until your PC is back, then point `JARVIS_BASE_URL` at the PC's Ollama over Tailscale and cancel that bill.

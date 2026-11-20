@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -490,6 +491,91 @@ def _parse_search_results(raw: str, limit: int) -> List[Any]:
     return results
 
 
+# Exa answers from a normal HTTPS API with real pages, which is what a server
+# needs: DuckDuckGo and Bing both treat a datacenter address as a bot, so the
+# scrapers return an anomaly page or "Best Buy, Merriam-Webster" for a query
+# about mice. Without a key the scrapers are still tried, just not trusted.
+EXA_URL = "https://api.exa.ai/search"
+
+# An engine that just failed is rested, so five searches in one turn do not each
+# pay fifteen seconds for the same block.
+_ENGINE_COOLDOWN: Dict[str, float] = {}
+_ENGINE_COOLDOWN_SECONDS = 600
+_SEARCH_BUDGET_SECONDS = 30.0
+_ENGINE_JUNK: Dict[str, int] = {}
+
+_SHOPPING_QUERY = re.compile(
+    r"\b(buy|buying|price|prices|cheap|cheapest|deal|deals|discount|coupon|shop|shopping|"
+    r"amazon|ebay|argos|currys|aliexpress|etsy|store|under\s+\$?\d+)\b",
+    re.IGNORECASE,
+)
+_ENCYCLOPEDIC_QUERY = re.compile(
+    r"\b(who|what|when|where|why|how|history|meaning|definition|biography|born|died|founded|"
+    r"invented|capital|population|species|wikipedia|explain)\b",
+    re.IGNORECASE,
+)
+
+
+def _encyclopedic(query: str) -> bool:
+    """True when Wikipedia could actually answer this.
+
+    It is the one engine that always works from a server, so it used to answer
+    everything: "best cheap gaming mouse on Amazon" came back as articles about
+    Amazon Luna, a video game and a TV series, and the model then reported that
+    the search results were irrelevant. It now only steps in for questions it can
+    answer, and never for anything you can buy.
+    """
+    return bool(_ENCYCLOPEDIC_QUERY.search(query)) and not _SHOPPING_QUERY.search(query)
+
+
+def _cooling(name: str) -> bool:
+    return _ENGINE_COOLDOWN.get(name, 0.0) > time.monotonic()
+
+
+def _cool(name: str) -> None:
+    _ENGINE_COOLDOWN[name] = time.monotonic() + _ENGINE_COOLDOWN_SECONDS
+
+
+def _fetch_search_page(url: str) -> str:
+    request = urllib.request.Request(url, headers=PAGE_HEADERS)
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return response.read(MAX_FETCH_BYTES).decode("utf-8", "replace")
+
+
+def _exa_results(query: str, limit: int) -> List[Any]:
+    """Exa's search API, used whenever EXA_API_KEY is set."""
+    key = os.environ.get("EXA_API_KEY", "").strip()
+    if not key:
+        return []
+    payload = json.dumps(
+        {
+            "query": query,
+            "numResults": max(1, min(limit, 10)),
+            "type": "auto",
+            "contents": {"text": {"maxCharacters": 400}},
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        EXA_URL,
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/json", "x-api-key": key},
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        data = json.loads(response.read(MAX_FETCH_BYTES).decode("utf-8", "replace"))
+    results: List[Any] = []
+    for item in (data.get("results") or [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        title = " ".join(str(item.get("title") or "").split())
+        url = str(item.get("url") or "").strip()
+        if not title or not url.startswith("http"):
+            continue
+        snippet = " ".join(str(item.get("text") or item.get("summary") or "").split())[:300]
+        results.append((title, url, snippet))
+    return results
+
+
 def search_web(query: str, limit: int = 5) -> Any:
     """Search the web, trying each engine in turn until one answers.
 
@@ -497,30 +583,58 @@ def search_web(query: str, limit: int = 5) -> Any:
     (title, url, snippet) results, and one line per engine that failed.
     """
     quoted = urllib.parse.quote_plus(query)
-    engines = (
-        ("duckduckgo", "https://html.duckduckgo.com/html/?q=" + quoted, _parse_search_results),
-        ("duckduckgo lite", "https://lite.duckduckgo.com/lite/?q=" + quoted, _parse_search_results),
-        ("bing", "https://www.bing.com/search?q=" + quoted, _parse_bing),
+    engines: List[Any] = []
+    if os.environ.get("EXA_API_KEY", "").strip():
+        engines.append(("exa", lambda: _exa_results(query, limit)))
+    engines += [
         (
-            "wikipedia",
-            "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=%d&srsearch="
-            % limit + quoted,
-            _parse_wikipedia,
+            "duckduckgo",
+            lambda: _parse_search_results(
+                _fetch_search_page("https://html.duckduckgo.com/html/?q=" + quoted), limit
+            ),
         ),
-    )
-    problems = []
-    for name, url, parser in engines:
-        request = urllib.request.Request(url, headers=PAGE_HEADERS)
+        (
+            "duckduckgo lite",
+            lambda: _parse_search_results(
+                _fetch_search_page("https://lite.duckduckgo.com/lite/?q=" + quoted), limit
+            ),
+        ),
+        ("bing", lambda: _parse_bing(_fetch_search_page("https://www.bing.com/search?q=" + quoted), limit)),
+    ]
+    if _encyclopedic(query):
+        wikipedia_url = (
+            "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json"
+            "&srlimit=%d&srsearch=%s" % (limit, quoted)
+        )
+        engines.append(("wikipedia", lambda: _parse_wikipedia(_fetch_search_page(wikipedia_url), limit)))
+
+    problems: List[str] = []
+    deadline = time.monotonic() + _SEARCH_BUDGET_SECONDS
+    for name, fetch in engines:
+        if _cooling(name):
+            problems.append("%s: resting after a recent failure" % name)
+            continue
+        if time.monotonic() >= deadline:
+            problems.append("%s: no time left" % name)
+            break
         try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                raw = response.read(MAX_FETCH_BYTES).decode("utf-8", "replace")
+            results = fetch()
         except Exception as exc:
             problems.append("%s: %s" % (name, exc))
+            _cool(name)
             continue
-        results = parser(raw, limit)
         if results and _relevant(results, query):
+            _ENGINE_JUNK.pop(name, None)
             return name, results, problems
         problems.append("%s: %s" % (name, "only unrelated results" if results else "no results"))
+        if results:
+            # A page of unrelated hits is a bot wall, but one odd query can look
+            # the same, so the engine is only rested if it happens twice running.
+            _ENGINE_JUNK[name] = _ENGINE_JUNK.get(name, 0) + 1
+            if _ENGINE_JUNK[name] >= 2:
+                _cool(name)
+        else:
+            _cool(name)
     return "", [], problems
 
 

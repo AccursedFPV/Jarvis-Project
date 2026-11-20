@@ -73,11 +73,29 @@ _TOOL_CALL_TAG = re.compile(
 )
 
 
+
+# Tool markup that some models write into the text instead of calling a tool.
+_ARG_MARKUP = re.compile(r"<(?:arg_key|arg_value|parameters|tool_name)\b", re.IGNORECASE)
+_ARG_BLOCK = re.compile(
+    r"<(arg_key|arg_value|parameters|tool_name)\b[^>]*>.*?"
+    r"(?:</(?:arg_key|arg_value|parameters|tool_name)\s*>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_LEAK_OPEN = re.compile(
+    r"<(arg_key|arg_value|parameters|tool_name|tool_call|tool_calls|function_call|tool_code)\b[^>]*>",
+    re.IGNORECASE,
+)
+_LEAK_CLOSE = re.compile(
+    r"</(arg_key|arg_value|parameters|tool_name|tool_call|tool_calls|function_call|tool_code)\s*>",
+    re.IGNORECASE,
+)
+
+
 def _clean_reply(text: str) -> str:
     """Remove reasoning that some GLM builds write inside the answer.
 
     z.ai normally sends the chain of thought as reasoning_content, but the same
-    model sometimes emits it as content wrapped in <think>...</think>, or opens
+    model sometimes emits it as content wrapped in  thinking...</think>, or opens
     the answer with the tail of its thinking and a bare </think>. Either way the
     phone showed a thought, a literal </think>, and then the answer again.
     """
@@ -93,6 +111,15 @@ def _clean_reply(text: str) -> str:
         )
         text = _TOOL_CALL_TAG.sub("", text)
         lowered = text.lower()
+    if _ARG_MARKUP.search(lowered):
+        # The model wrote a whole tool call as text: the tool name on one line,
+        # then <arg_key>steps</arg_key><arg_value>1. ...</arg_value>. The phone
+        # showed all of it as if it were the answer.
+        text = _ARG_BLOCK.sub("\n", text)
+        text = _TOOL_CALL_TAG.sub("", text)
+        text = re.sub(r"(?m)^\s*[a-z][a-z0-9_]{2,30}\s*$", "", text)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        lowered = text.lower()
     if "<think" not in lowered and "</think" not in lowered:
         return text.strip()
     # Paired blocks first, so an answer that merely mentions one keeps its text.
@@ -106,6 +133,59 @@ def _clean_reply(text: str) -> str:
             text = text[close + 1 :]
     text = re.sub(r"</?think\b[^>]*>", "", text, flags=re.IGNORECASE)
     return text.strip()
+
+
+class _LeakFilter:
+    """Holds back tool-call markup so it never reaches the phone.
+
+    Streaming happens before the reply can be cleaned, so the display needs its
+    own filter: an opening <arg_key>/<arg_value>/<tool_call> tag starts a block
+    that is swallowed whole, and a half-written tag at the end of a chunk waits
+    for the rest instead of being shown.
+    """
+
+    HOLD = 40
+
+    def __init__(self, emit: Callable[[str], None]) -> None:
+        self.emit = emit
+        self.buffer = ""
+        self.inside = ""
+
+    def feed(self, text: str) -> None:
+        if not text:
+            return
+        self.buffer += str(text)
+        while self.buffer:
+            if self.inside:
+                close = _LEAK_CLOSE.search(self.buffer)
+                if close and close.group(1).lower() == self.inside:
+                    self.buffer = self.buffer[close.end() :]
+                    self.inside = ""
+                    continue
+                self.buffer = self.buffer[-self.HOLD :]
+                return
+            opened = _LEAK_OPEN.search(self.buffer)
+            if opened:
+                before = self.buffer[: opened.start()]
+                if before:
+                    self.emit(before)
+                self.inside = opened.group(1).lower()
+                self.buffer = self.buffer[opened.end() :]
+                continue
+            cut = self.buffer.rfind("<")
+            if cut != -1 and ">" not in self.buffer[cut:] and len(self.buffer) - cut <= self.HOLD:
+                # Could be the first half of a tag: wait for the next chunk.
+                if cut:
+                    self.emit(self.buffer[:cut])
+                self.buffer = self.buffer[cut:]
+                return
+            self.emit(self.buffer)
+            self.buffer = ""
+
+    def flush(self) -> None:
+        if self.buffer and not self.inside:
+            self.emit(self.buffer)
+        self.buffer = ""
 
 
 def _log(message: str) -> None:
@@ -336,6 +416,9 @@ class LLM:
         calls: Dict[int, Dict[str, str]] = {}
         finish = ""
         emitted = False
+        # Tool markup is swallowed before it can be drawn on the phone.
+        filter_ = _LeakFilter(on_token) if on_token else None
+        display = filter_.feed if filter_ is not None else None
 
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -343,7 +426,7 @@ class LLM:
                 if "application/json" in content_type and "event-stream" not in content_type:
                     # Some gateways ignore stream=true and answer with one JSON body.
                     return _parse_full_response(
-                        response.read().decode("utf-8", "replace"), on_token, on_reasoning
+                        response.read().decode("utf-8", "replace"), display, on_reasoning
                     )
                 for raw_line in response:
                     if should_stop and should_stop():
@@ -378,8 +461,8 @@ class LLM:
                     if text:
                         emitted = True
                         content_parts.append(str(text))
-                        if on_token:
-                            on_token(str(text))
+                        if display:
+                            display(str(text))
                     for call in delta.get("tool_calls") or []:
                         index = int(call.get("index") or 0)
                         entry = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
@@ -408,6 +491,8 @@ class LLM:
                 capacity=True,
             ) from exc
 
+        if filter_ is not None:
+            filter_.flush()
         return Reply(
             content=_clean_reply("".join(content_parts)),
             tool_calls=[
