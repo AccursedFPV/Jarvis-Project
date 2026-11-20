@@ -6,6 +6,7 @@ import getpass
 import json
 import os
 import platform
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -47,6 +48,8 @@ How to work:
 - Keep replies short and natural, as if speaking aloud, unless the user asks for detail. Use only light markdown.
 - Never invent file contents, command output or facts. Never store passwords, API keys or other secrets.
 - When you learn something reusable - a command that worked, a fix, a pattern - call learn once with it. Do not record trivia or things already in memory.
+- When the user says remember, learn or "from now on", call remember (about them) or learn (about the work) in that same turn, then say in one line what you stored. Never just agree to remember.
+- When you need an ability you do not have, offer to build it with write_skill, and build it as soon as they say yes.
 
 Your own code and state:
 - You are the Python package at {source}. That is your own source: the tools, this prompt, the phone page, the voice loop. You may read it and change it.
@@ -73,6 +76,8 @@ class Agent:
         self.memory = memory
         self.config = config
         self.ui = ui
+        # A correction appended to the next system prompt, used once.
+        self._nudge = ""
         self.history: List[Dict[str, Any]] = []
 
     # ---------------------------------------------------------------- prompting
@@ -123,7 +128,12 @@ class Agent:
         return self.history[cut:]
 
     def request_messages(self) -> List[Dict[str, Any]]:
-        return [self.system_message(self._last_user_text())] + self._recent_history()
+        system = self.system_message(self._last_user_text())
+        if self._nudge:
+            # One extra instruction for one call only; kept out of the history.
+            system["content"] += "\n\n" + self._nudge
+            self._nudge = ""
+        return [system] + self._recent_history()
 
     # -------------------------------------------------------------------- chat
 
@@ -140,6 +150,7 @@ class Agent:
         self.history.append({"role": "user", "content": user_text})
         steps = 0
         offer_tools = True
+        nudged = False
         try:
             while True:
                 reply = self.llm.chat(
@@ -163,7 +174,19 @@ class Agent:
                 self.history.append(assistant)
 
                 if not reply.tool_calls:
-                    return (reply.content or "").strip()
+                    text = (reply.content or "").strip()
+                    # A promise is not an answer. Asking again with the promise
+                    # quoted is what turns "I'll check the date" into a call.
+                    if not nudged and _announces(text):
+                        nudged = True
+                        self.history.pop()
+                        self._nudge = (
+                            "Your previous answer only announced an action: %r. "
+                            "Do it now by calling the tool, or answer the question directly. "
+                            "Never reply with only a promise." % text[:200]
+                        )
+                        continue
+                    return text
 
                 if steps + len(reply.tool_calls) > _max_steps():
                     offer_tools = False
@@ -191,6 +214,24 @@ class Agent:
 
 
 # ------------------------------------------------------------------- sessions
+
+
+PROMISE = re.compile(
+    r"^\W*(sure[,!]?\s*)?(i'?ll|i will|i am going to|i'm going to|i shall|let me|allow me)\b",
+    re.IGNORECASE,
+)
+
+
+def _announces(text: str) -> bool:
+    """True for a short reply that only says what it is about to do.
+
+    GLM-4.7 does this: "I'll check the current date and time" and stops, with no
+    tool call, so nothing happens and the user is left asking what it means.
+    """
+    body = " ".join((text or "").split())
+    if not body or len(body) > 320 or body.endswith("?"):
+        return False
+    return bool(PROMISE.match(body))
 
 
 def _step_label(name: str, args: Dict[str, Any]) -> str:
