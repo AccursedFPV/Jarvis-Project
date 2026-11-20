@@ -132,6 +132,8 @@ class Agent:
         on_token: Optional[Callable[[str], None]] = None,
         on_tool: Optional[Callable[[], None]] = None,
         model: Optional[str] = None,
+        on_reasoning: Optional[Callable[[str], None]] = None,
+        on_step: Optional[Callable[[str], None]] = None,
     ) -> str:
         checkpoint = len(self.history)
         self.history.append({"role": "user", "content": user_text})
@@ -145,6 +147,7 @@ class Agent:
                     temperature=self.config.temperature,
                     on_token=on_token,
                     model=model,
+                    on_reasoning=on_reasoning,
                 )
                 assistant: Dict[str, Any] = {"role": "assistant", "content": reply.content or ""}
                 if reply.tool_calls:
@@ -177,6 +180,8 @@ class Agent:
                         result = "ERROR: " + parse_error
                     else:
                         self.ui.tool(call.name, args)
+                        if on_step:
+                            on_step(_step_label(call.name, args))
                         result = self.toolbox.run(call.name, args)
                     self.history.append({"role": "tool", "tool_call_id": call.id, "content": result})
         except KeyboardInterrupt:
@@ -185,6 +190,22 @@ class Agent:
 
 
 # ------------------------------------------------------------------- sessions
+
+
+def _step_label(name: str, args: Dict[str, Any]) -> str:
+    """One readable line for the app: what Jarvis is doing, and to what."""
+    parts = []
+    for key, value in list(args.items())[:3]:
+        if isinstance(value, str):
+            text = " ".join(value.split())
+            if len(text) > 60:
+                text = text[:57] + "..."
+        else:
+            text = json.dumps(value, ensure_ascii=False)
+            if len(text) > 60:
+                text = text[:57] + "..."
+        parts.append("%s=%s" % (key, text))
+    return "%s(%s)" % (name, ", ".join(parts))
 
 
 def _parse_arguments(raw: str) -> Tuple[Dict[str, Any], Optional[str]]:

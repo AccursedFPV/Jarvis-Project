@@ -54,18 +54,17 @@ def _budget() -> float:
 def _thinking() -> Optional[str]:
     """Chain-of-thought setting for each request (JARVIS_THINKING).
 
-    GLM-4.7 thinks compulsorily unless told not to, and that reasoning happens
-    before the first visible word: a one-line answer to "Jarvis?" took 70s.
-    Off by default, because a companion that answers in 3s is worth more than
-    one that reasons for a minute about a greeting. Set JARVIS_THINKING=on to
-    bring it back for hard work, or =auto to leave the choice to the vendor.
+    On by default: the reasoning is streamed to the app, so a turn that thinks
+    for 30s shows what it is working through instead of looking frozen.
+    JARVIS_THINKING=off gives the fastest answers (GLM-4.7 then skips reasoning
+    entirely), and =auto leaves the choice to the vendor.
     """
     raw = os.environ.get("JARVIS_THINKING", "").strip().lower()
-    if raw in {"on", "enabled", "true", "1", "yes", "think"}:
-        return "enabled"
+    if raw in {"off", "disabled", "none", "false", "0", "no", "fast"}:
+        return "disabled"
     if raw in {"auto", "default", "vendor"}:
         return None
-    return "disabled"
+    return "enabled"
 
 
 def _log(message: str) -> None:
@@ -136,6 +135,7 @@ class LLM:
         temperature: float = 0.4,
         on_token: Optional[Callable[[str], None]] = None,
         model: Optional[str] = None,
+        on_reasoning: Optional[Callable[[str], None]] = None,
     ) -> Reply:
         budget = _budget()
         started = time.monotonic()
@@ -154,7 +154,9 @@ class LLM:
                 failures.append("%s: no time left" % name)
                 break
             try:
-                return self._with_retries(url, key, name, messages, tools, temperature, on_token, attempts, deadline)
+                return self._with_retries(
+                    url, key, name, messages, tools, temperature, on_token, attempts, deadline, on_reasoning
+                )
             except LLMError as exc:
                 failures.append("%s: %s" % (name, exc) if len(targets) > 1 else str(exc))
                 if index + 1 < len(targets):
@@ -177,6 +179,7 @@ class LLM:
         on_token: Optional[Callable[[str], None]],
         attempts: int,
         deadline: float,
+        on_reasoning: Optional[Callable[[str], None]] = None,
     ) -> Reply:
         started = time.monotonic()
         first_word: List[float] = []
@@ -190,7 +193,7 @@ class LLM:
         last: Optional[_Retry] = None
         for attempt in range(attempts):
             try:
-                reply = self._stream(url, api_key, name, messages, tools, temperature, relay)
+                reply = self._stream(url, api_key, name, messages, tools, temperature, relay, on_reasoning)
                 now = time.monotonic()
                 waited = "%.1fs to first word" % (first_word[0] - started) if first_word else "no words streamed"
                 _log(
@@ -227,6 +230,7 @@ class LLM:
         tools: Optional[List[Dict[str, Any]]],
         temperature: float,
         on_token: Optional[Callable[[str], None]],
+        on_reasoning: Optional[Callable[[str], None]] = None,
     ) -> Reply:
         payload: Dict[str, Any] = {
             "model": model,
@@ -241,13 +245,13 @@ class LLM:
         if mode:
             payload["thinking"] = {"type": mode}
         try:
-            return self._post(url, api_key, payload, on_token)
+            return self._post(url, api_key, payload, on_token, on_reasoning)
         except _ThinkingRejected:
             # GLM-5.3 and its flash sibling refuse to run without thinking. An
             # answer with the vendor's default beats an error about a switch.
             payload.pop("thinking", None)
             _log("%s refuses thinking=disabled, continuing with its default" % model)
-            return self._post(url, api_key, payload, on_token)
+            return self._post(url, api_key, payload, on_token, on_reasoning)
 
     def _post(
         self,
@@ -255,6 +259,7 @@ class LLM:
         api_key: str,
         payload: Dict[str, Any],
         on_token: Optional[Callable[[str], None]],
+        on_reasoning: Optional[Callable[[str], None]] = None,
     ) -> Reply:
         request = urllib.request.Request(
             url,
@@ -278,7 +283,9 @@ class LLM:
                 content_type = (response.headers.get("Content-Type") or "").lower()
                 if "application/json" in content_type and "event-stream" not in content_type:
                     # Some gateways ignore stream=true and answer with one JSON body.
-                    return _parse_full_response(response.read().decode("utf-8", "replace"), on_token)
+                    return _parse_full_response(
+                        response.read().decode("utf-8", "replace"), on_token, on_reasoning
+                    )
                 for raw_line in response:
                     line = raw_line.decode("utf-8", "replace").strip()
                     if not line or line.startswith(":") or not line.startswith("data:"):
@@ -299,6 +306,11 @@ class LLM:
                         continue
                     choice = choices[0]
                     delta = choice.get("delta") or {}
+                    # The chain of thought arrives separately from the answer; it
+                    # is shown in the app but never counted as the reply.
+                    thought = delta.get("reasoning_content")
+                    if thought and on_reasoning:
+                        on_reasoning(str(thought))
                     text = delta.get("content")
                     if text:
                         emitted = True
@@ -351,7 +363,11 @@ class LLM:
 # ---------------------------------------------------------------- body parsing
 
 
-def _parse_full_response(raw: str, on_token: Optional[Callable[[str], None]]) -> Reply:
+def _parse_full_response(
+    raw: str,
+    on_token: Optional[Callable[[str], None]],
+    on_reasoning: Optional[Callable[[str], None]] = None,
+) -> Reply:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -366,6 +382,9 @@ def _parse_full_response(raw: str, on_token: Optional[Callable[[str], None]]) ->
     choice = choices[0]
     message = choice.get("message") or {}
     content = str(message.get("content") or "")
+    thought = message.get("reasoning_content")
+    if thought and on_reasoning:
+        on_reasoning(str(thought))
     if content and on_token:
         on_token(content)
     calls: List[ToolCall] = []

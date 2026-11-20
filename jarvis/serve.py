@@ -118,6 +118,19 @@ INDEX_HTML = """<!doctype html>
   .del { background: none; border: 0; color: var(--muted); font-size: 16px; padding: 4px 6px; line-height: 1; }
   #shade { position: fixed; inset: 0; background: #000a; display: none; z-index: 4; }
   #shade.open { display: block; }
+  .think { align-self: flex-start; max-width: 88%; font-size: 12.5px; color: #93a8c0;
+           border-left: 2px solid #1f3f63; padding: 1px 0 1px 10px; display: none; }
+  .think.on { display: block; }
+  .think-head { font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase;
+                color: #64809e; user-select: none; -webkit-user-select: none; padding: 2px 0; }
+  .think-head::after { content: "  tap to fold"; letter-spacing: 0; text-transform: none;
+                       color: #3d5674; font-size: 10px; }
+  .think-body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px;
+                max-height: 38vh; overflow-y: auto; opacity: .9; }
+  .think.folded .think-body, .think.folded .steps { display: none; }
+  .steps { margin-top: 6px; font-size: 12px; color: #7f97b3; }
+  .steps div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .steps div::before { content: "\\203A  "; color: #4a6b8c; }
 </style>
 </head>
 <body>
@@ -329,6 +342,25 @@ function setLocked(locked) {
   });
   textInput.disabled = locked;
 }
+function thinkingPanel() {
+  // What the model is reasoning and which tools it reaches for, as it happens.
+  const panel = document.createElement("div");
+  panel.className = "think on";
+  const head = document.createElement("div");
+  head.className = "think-head";
+  head.textContent = "thinking";
+  const body = document.createElement("div");
+  body.className = "think-body";
+  const steps = document.createElement("div");
+  steps.className = "steps";
+  panel.appendChild(head);
+  panel.appendChild(body);
+  panel.appendChild(steps);
+  head.onclick = function () { panel.classList.toggle("folded"); };
+  log.appendChild(panel);
+  log.scrollTop = log.scrollHeight;
+  return { panel: panel, head: head, body: body, steps: steps };
+}
 async function send(message) {
   if (sending) return;
   sending = true;
@@ -339,21 +371,73 @@ async function send(message) {
   const shown = bubble(message || "(" + files.length + " attachment(s))", "you");
   files.forEach(function (item) { showAttachment(shown, item.name, item.kind, item.preview); });
   setStatus("thinking...");
-  try {
-    const data = await api("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: message, chat: chatId, files: files.map(function (item) { return { name: item.name, kind: item.kind }; }) })
-    });
-    if (data.chat) {
-      chatId = data.chat;
-      localStorage.setItem("jarvis_chat", chatId);
+
+  const view = thinkingPanel();
+  let answer = null;
+  function answerBubble() {
+    if (!answer) {
+      answer = bubble("", "jarvis");
+      view.panel.classList.add("folded");
     }
-    bubble(data.reply || "(empty reply)", "jarvis");
+    return answer;
+  }
+  function handle(event) {
+    if (event.t === "think") {
+      view.body.textContent += event.d;
+    } else if (event.t === "step") {
+      const line = document.createElement("div");
+      line.textContent = event.d;
+      view.steps.appendChild(line);
+      view.head.textContent = "working";
+    } else if (event.t === "say") {
+      answerBubble().textContent += event.d;
+    } else if (event.t === "error") {
+      throw new Error(event.d);
+    } else if (event.t === "done") {
+      if (event.chat) {
+        chatId = event.chat;
+        localStorage.setItem("jarvis_chat", chatId);
+      }
+      const text = event.reply || "(empty reply)";
+      answerBubble().textContent = text;
+      speak(text);
+    }
+    log.scrollTop = log.scrollHeight;
+  }
+
+  try {
+    const response = await fetch("/chat", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify({ message: message, chat: chatId, stream: true, files: files.map(function (item) { return { name: item.name, kind: item.kind }; }) })
+    });
+    if (response.status === 401) { localStorage.removeItem("jarvis_token"); throw new Error("Wrong or missing token."); }
+    if (!response.ok || !response.body) {
+      const data = await response.json().catch(function () { return {}; });
+      throw new Error(data.error || ("HTTP " + response.status));
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let waiting = "", failure = null;
+    while (!failure) {
+      const step = await reader.read();
+      if (step.done) break;
+      waiting += decoder.decode(step.value, { stream: true });
+      const lines = waiting.split("\\n");
+      waiting = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try { handle(JSON.parse(line)); } catch (error) { failure = error; break; }
+      }
+    }
+    if (failure) throw failure;
     setStatus("ready");
-    speak(data.reply || "");
   } catch (error) { fail(error.message); }
-  finally { sending = false; setLocked(false); }
+  finally {
+    if (!view.body.textContent && !view.steps.children.length) view.panel.remove();
+    sending = false;
+    setLocked(false);
+  }
 }
 document.getElementById("send").onclick = function () {
   const value = textInput.value.trim();
@@ -660,6 +744,9 @@ class JarvisServer(ThreadingHTTPServer):
         files: Any = None,
         images: Any = None,
         model: Any = None,
+        on_reasoning: Any = None,
+        on_step: Any = None,
+        on_token: Any = None,
     ) -> Any:
         # One reply at a time: a second message would otherwise queue silently
         # behind a slow one and look like nothing is happening.
@@ -680,7 +767,13 @@ class JarvisServer(ThreadingHTTPServer):
                 # the vision model with the words and the picture together.
                 content = [{"type": "text", "text": message}]
                 content += [{"type": "image_url", "image_url": {"url": url}} for url in images]
-            reply = self.agent.chat(content, model=model)
+            reply = self.agent.chat(
+                content,
+                model=model,
+                on_reasoning=on_reasoning,
+                on_step=on_step,
+                on_token=on_token,
+            )
             self.chats.append(data, {"role": "user", "text": message, "files": files or []})
             self.chats.append(data, {"role": "assistant", "text": reply})
             return reply, data["id"]
@@ -696,8 +789,9 @@ class JarvisServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Jarvis/0.2"
+    server_version = "Jarvis/0.3"
     protocol_version = "HTTP/1.1"
+    _streaming = False
 
     # ----------------------------------------------------------------- answers
 
@@ -716,6 +810,45 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, code: int, payload: Any) -> None:
         self._send(code, json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8")
+
+    # ------------------------------------------------------------ live answers
+
+    def _start_stream(self) -> None:
+        """Open a chunked response so the phone can watch the work happen.
+
+        Length is unknown up front, so the body is sent in chunks: one JSON
+        object per line, flushed as each piece arrives.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        self._streaming = True
+
+    def _event(self, payload: Any) -> None:
+        if not self._streaming:
+            return
+        data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+        try:
+            self.wfile.write(("%x\r\n" % len(data)).encode("ascii") + data + b"\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            # The phone left - screen off, tunnel blip, reload. The turn keeps
+            # going and the reply is still saved into the chat.
+            self._streaming = False
+            self.close_connection = True
+
+    def _end_stream(self) -> None:
+        if not self._streaming:
+            return
+        try:
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            self.close_connection = True
+        self._streaming = False
 
     def _failure(self, where: str, exc: Exception) -> str:
         """Log a failure to stderr, where journald keeps it, and return the detail.
@@ -892,6 +1025,28 @@ class Handler(BaseHTTPRequestHandler):
                 message = (message + "".join(notes)).strip()
             if not message:
                 self._json(400, {"error": "message is required"})
+                return
+            if payload.get("stream"):
+                # Events, one JSON object per line: think (chain of thought),
+                # step (a tool being used), say (answer text), done, error.
+                self._start_stream()
+                try:
+                    reply, chat_id = self.server.chat(
+                        message,
+                        chat_id,
+                        files,
+                        images,
+                        vision or None,
+                        on_reasoning=lambda text: self._event({"t": "think", "d": text}),
+                        on_step=lambda text: self._event({"t": "step", "d": text}),
+                        on_token=lambda text: self._event({"t": "say", "d": text}),
+                    )
+                except Exception as exc:
+                    self._event({"t": "error", "d": self._failure("chat", exc)})
+                    self._end_stream()
+                    return
+                self._event({"t": "done", "reply": reply, "chat": chat_id})
+                self._end_stream()
                 return
             try:
                 reply, chat_id = self.server.chat(message, chat_id, files, images, vision or None)
