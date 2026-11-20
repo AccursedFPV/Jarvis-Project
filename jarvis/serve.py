@@ -14,6 +14,7 @@ import io
 import json
 import os
 import secrets
+import sys
 import threading
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -318,10 +319,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The phone went away while we were answering (screen off, reload,
+            # tunnel blip). Nothing to report and nobody to tell.
+            self.close_connection = True
 
     def _json(self, code: int, payload: Any) -> None:
         self._send(code, json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8")
+
+    def _failure(self, where: str, exc: Exception) -> str:
+        """Log a failure to stderr, where journald keeps it, and return the detail.
+
+        The phone only sees a short line; without this the reason lived in an
+        HTTP response that a disconnected client then threw away.
+        """
+        detail = "%s: %s" % (type(exc).__name__, exc)
+        try:
+            print("jarvis: %s failed - %s" % (where, detail), file=sys.stderr, flush=True)
+        except Exception:
+            pass
+        return detail
 
     def _authorised(self, query: Any) -> bool:
         header = (self.headers.get("Authorization") or "").strip()
@@ -400,7 +419,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 reply = self.server.chat(message)
             except Exception as exc:
-                self._json(500, {"error": "%s: %s" % (type(exc).__name__, exc)})
+                self._json(500, {"error": self._failure("chat", exc)})
                 return
             self._json(200, {"reply": reply})
             return
@@ -418,6 +437,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 heard = self.server.transcribe(audio)
             except Exception as exc:
+                self._failure("transcribe", exc)
                 self._json(503, {"error": "speech recognition unavailable: %s" % exc})
                 return
             heard = " ".join(str(heard or "").split())
@@ -427,7 +447,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 reply = self.server.chat(heard)
             except Exception as exc:
-                self._json(500, {"error": "%s: %s" % (type(exc).__name__, exc)})
+                self._json(500, {"error": self._failure("voice chat", exc)})
                 return
             self._json(200, {"heard": heard, "reply": reply})
             return
