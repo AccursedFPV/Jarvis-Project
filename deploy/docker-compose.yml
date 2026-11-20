@@ -1,0 +1,36 @@
+# Run Jarvis + a local model with Docker on any machine with an NVIDIA GPU
+# (a GPU VM, or your own PC when it arrives).
+#
+#   cd deploy && docker compose up -d --build
+#   docker compose logs -f jarvis      # shows the phone URL and token
+#
+# On RunPod/Vast.ai you usually do not need compose: deploy the built image
+# directly, mount the network volume at /data and expose HTTP port 8787.
+
+services:
+  jarvis:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: jarvis:gpu
+    container_name: jarvis
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - jarvis-data:/data
+    environment:
+      JARVIS_MODEL: ${JARVIS_MODEL:-qwen3:14b}
+      JARVIS_LLM_TIMEOUT: ${JARVIS_LLM_TIMEOUT:-180}
+      # Leave empty and the container generates one into /data/server_token.
+      JARVIS_SERVER_TOKEN: ${JARVIS_SERVER_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  jarvis-data:

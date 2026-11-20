@@ -1,0 +1,27 @@
+# Always-listening Jarvis as a systemd user service (Linux).
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/jarvis-listen.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now jarvis-listen
+#
+# Logs:    journalctl --user -u jarvis-listen -f
+# Stop:    systemctl --user stop jarvis-listen
+# Mic:     the service runs as your user, so it uses your PipeWire/PulseAudio
+#          session. If no microphone is found, run `jarvis --listen` by hand
+#          once to check the device first.
+
+[Unit]
+Description=Jarvis always-listening voice assistant
+After=graphical-session.target sound.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/jarvis --listen
+WorkingDirectory=%h
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

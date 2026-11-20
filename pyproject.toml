@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvis-cli"
+version = "0.2.0"
+description = "Jarvis — a personal AI companion in your terminal that can use your files, apps and shell."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+voice = ["SpeechRecognition>=3.10"]
+listen = ["numpy>=1.24", "sounddevice>=0.4.6", "openwakeword>=0.6", "faster-whisper>=1.0"]
+
+[project.scripts]
+jarvis = "jarvis.cli:main"
+
+[tool.setuptools]
+packages = ["jarvis"]

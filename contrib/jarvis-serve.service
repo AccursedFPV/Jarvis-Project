@@ -1,0 +1,27 @@
+# Jarvis phone/API server as a system service (VPS or always-on box).
+# deploy/vps-install.sh installs this for you. By hand:
+#
+#   install -m 644 contrib/jarvis-serve.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now jarvis-serve
+#
+# Secrets and settings live in /etc/jarvis.env (mode 600), not here.
+
+[Unit]
+Description=Jarvis assistant server (phone/API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jarvis
+Group=jarvis
+EnvironmentFile=/etc/jarvis.env
+WorkingDirectory=/opt/jarvis
+ExecStart=/opt/jarvis/.venv/bin/jarvis --serve --host 0.0.0.0 --port 8787
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

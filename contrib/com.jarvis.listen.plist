@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Always-listening Jarvis as a launchd agent (macOS).
+
+  1. Replace YOUR_USERNAME below with your short user name (run `whoami`).
+  2. cp contrib/com.jarvis.listen.plist ~/Library/LaunchAgents/
+  3. launchctl load ~/Library/LaunchAgents/com.jarvis.listen.plist
+
+  Logs:  ~/Library/Logs/jarvis-listen.log
+  Stop:  launchctl unload ~/Library/LaunchAgents/com.jarvis.listen.plist
+
+  The first run triggers a macOS microphone permission prompt for the
+  process; approve it in System Settings > Privacy & Security > Microphone.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.listen</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/.local/bin/jarvis</string>
+        <string>--listen</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USERNAME</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/jarvis-listen.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/jarvis-listen.log</string>
+</dict>
+</plist>
