@@ -301,8 +301,16 @@ def _http_error_message(code: int, detail: str) -> str:
         402: "the account is out of credit or the plan does not cover this endpoint",
         403: "access denied for this key, model or endpoint",
         404: "the endpoint or model was not found - check JARVIS_BASE_URL and JARVIS_MODEL",
-        429: "the free tier allows only a few model calls per minute - wait a few seconds and ask again",
+        429: "too many requests for this account - wait a few seconds and ask again",
     }
+    if code == 429:
+        # The same status carries two very different problems: our quota, or
+        # their capacity. Telling them apart stops pointless plan upgrades.
+        lowered = (detail or "").lower()
+        if "overload" in lowered or "1305" in lowered:
+            hints[429] = "the provider itself is overloaded (code 1305) - nothing to fix on our side, retry shortly"
+        elif "1302" in lowered or "rate limit" in lowered:
+            hints[429] = "this account's request rate limit was hit (code 1302) - wait, or use a paid model"
     message = "Model API error %d: %s" % (code, hints.get(code, "request failed"))
     if detail:
         message += " (%s)" % _short(detail, 400)
