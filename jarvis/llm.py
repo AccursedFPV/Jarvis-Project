@@ -65,6 +65,7 @@ class LLM:
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.4,
         on_token: Optional[Callable[[str], None]] = None,
+        model: Optional[str] = None,
     ) -> Reply:
         attempts = 4
         budget = _budget()
@@ -72,7 +73,7 @@ class LLM:
         last: Optional[_Retry] = None
         for attempt in range(attempts):
             try:
-                return self._stream(messages, tools, temperature, on_token)
+                return self._stream(messages, tools, temperature, on_token, model)
             except _Retry as exc:
                 last = exc
                 if exc.partial or attempt == attempts - 1:
@@ -97,9 +98,10 @@ class LLM:
         tools: Optional[List[Dict[str, Any]]],
         temperature: float,
         on_token: Optional[Callable[[str], None]],
+        model: Optional[str] = None,
     ) -> Reply:
         payload: Dict[str, Any] = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": messages,
             "stream": True,
             "temperature": temperature,

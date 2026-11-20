@@ -49,6 +49,9 @@ class Config:
     wake_threshold: float = 0.5
     stt_model: str = "base.en"
     piper_voice: str = ""
+    # A picture cannot go to a text-only model, so image turns use this one.
+    # Set JARVIS_VISION_MODEL empty to fall back to paths only.
+    vision_model: str = "glm-4.6v-flash"
 
 
 def load_config() -> Config:
@@ -82,6 +85,8 @@ def load_config() -> Config:
         config.stt_model = data["stt_model"].strip()
     if isinstance(data.get("piper_voice"), str):
         config.piper_voice = data["piper_voice"].strip()
+    if isinstance(data.get("vision_model"), str):
+        config.vision_model = data["vision_model"].strip()
     return config
 
 
@@ -91,6 +96,7 @@ def apply_env_overrides(config: Config) -> Config:
         ("JARVIS_WAKE_WORD", "wake_word"),
         ("JARVIS_STT_MODEL", "stt_model"),
         ("JARVIS_PIPER_VOICE", "piper_voice"),
+        ("JARVIS_VISION_MODEL", "vision_model"),
     ):
         value = os.environ.get(env_name, "").strip()
         if value:

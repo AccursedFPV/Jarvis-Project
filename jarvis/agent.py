@@ -40,7 +40,7 @@ How to work:
 - If you need a capability you do not have, build it: write_skill writes Python that becomes a real tool (skill_<name>) you can call right away, in this session and every later one. Keep skills small, standard library only, and call a new skill once on real input before trusting it. If it fails, read the error and fix it with write_skill again.
 - Finish in a reasonable number of steps. Prefer one good command over five guesses, and stop when the task is actually done rather than polishing.
 - Look before you leap: list or read before overwriting, and check that an app or command exists before relying on it.
-- Files and pictures from the phone arrive in the message as [attached: /path]. Read text files with read_file and look at others with run_command (for example file, identify, unzip -l). You cannot see pictures: describe the file, not its contents, and say plainly that you cannot view images.
+- Files from the phone arrive as [attached: /path]: read text with read_file, other formats with run_command. A picture is different: it is sent to a vision model and you can see it, so answer from what is in the image. Never poke at an image file with file, identify or a struct parser - that is wasted steps.
 - Risky actions are already gated by an approval prompt, so don't ask the user for permission yourself. Say in one short line what you are about to do.
 - If a tool fails, read the error, fix the cause or try one sensible alternative, then report the outcome honestly.
 - Keep replies short and natural, as if speaking aloud, unless the user asks for detail. Use only light markdown.
@@ -78,8 +78,16 @@ class Agent:
 
     def _last_user_text(self) -> str:
         for message in reversed(self.history):
-            if message.get("role") == "user":
-                return str(message.get("content") or "")
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                # A turn carrying a picture is a list of parts; the words are
+                # what the lesson lookup can use.
+                return " ".join(
+                    str(part.get("text") or "") for part in content if isinstance(part, dict)
+                ).strip()
+            return str(content or "")
         return ""
 
     def _lessons(self, query: str) -> str:
@@ -120,9 +128,10 @@ class Agent:
 
     def chat(
         self,
-        user_text: str,
+        user_text: Any,
         on_token: Optional[Callable[[str], None]] = None,
         on_tool: Optional[Callable[[], None]] = None,
+        model: Optional[str] = None,
     ) -> str:
         checkpoint = len(self.history)
         self.history.append({"role": "user", "content": user_text})
@@ -135,6 +144,7 @@ class Agent:
                     self.toolbox.schemas() if offer_tools else None,
                     temperature=self.config.temperature,
                     on_token=on_token,
+                    model=model,
                 )
                 assistant: Dict[str, Any] = {"role": "assistant", "content": reply.content or ""}
                 if reply.tool_calls:

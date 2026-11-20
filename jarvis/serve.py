@@ -602,7 +602,14 @@ class JarvisServer(ThreadingHTTPServer):
         data = self.chats.load(chat_id) if chat_id else None
         return data or self.chats.new()
 
-    def chat(self, message: str, chat_id: str = "", files: Any = None) -> Any:
+    def chat(
+        self,
+        message: str,
+        chat_id: str = "",
+        files: Any = None,
+        images: Any = None,
+        model: Any = None,
+    ) -> Any:
         # One reply at a time: a second message would otherwise queue silently
         # behind a slow one and look like nothing is happening.
         if not self.lock.acquire(timeout=2):
@@ -616,7 +623,13 @@ class JarvisServer(ThreadingHTTPServer):
                 for item in data.get("messages", [])
                 if item.get("text") and item.get("role") in {"user", "assistant"}
             ]
-            reply = self.agent.chat(message)
+            content: Any = message
+            if images:
+                # A text-only model rejects image parts, so an image turn goes to
+                # the vision model with the words and the picture together.
+                content = [{"type": "text", "text": message}]
+                content += [{"type": "image_url", "image_url": {"url": url}} for url in images]
+            reply = self.agent.chat(content, model=model)
             self.chats.append(data, {"role": "user", "text": message, "files": files or []})
             self.chats.append(data, {"role": "assistant", "text": reply})
             return reply, data["id"]
@@ -799,17 +812,35 @@ class Handler(BaseHTTPRequestHandler):
                     name = Path(str(item.get("name") or "")).name
                     if name:
                         files.append({"name": name, "kind": str(item.get("kind") or "file")})
-            if files:
-                # The model cannot read bytes out of the request, so hand it the
-                # paths its own file tools already understand.
-                message = (message + "".join(
-                    "\n[attached: %s]" % (self.server.uploads / item["name"]) for item in files
-                )).strip()
+            config = getattr(self.server.agent, "config", None)
+            vision = (getattr(config, "vision_model", "") or "").strip()
+            images = []
+            notes = []
+            for item in files:
+                path = self.server.uploads / item["name"]
+                if item["kind"] != "image":
+                    notes.append("\n[attached: %s]" % path)
+                    continue
+                try:
+                    raw = path.read_bytes()
+                except OSError:
+                    notes.append("\n[attached: %s]" % path)
+                    continue
+                if not vision:
+                    notes.append("\n[attached: %s - pictures cannot be viewed, vision is off]" % path)
+                    continue
+                if len(raw) > 8 * 1024 * 1024:
+                    notes.append("\n[attached: %s - too large to look at]" % path)
+                    continue
+                kind = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+                images.append("data:%s;base64,%s" % (kind, base64.b64encode(raw).decode("ascii")))
+            if notes:
+                message = (message + "".join(notes)).strip()
             if not message:
                 self._json(400, {"error": "message is required"})
                 return
             try:
-                reply, chat_id = self.server.chat(message, chat_id, files)
+                reply, chat_id = self.server.chat(message, chat_id, files, images, vision or None)
             except Exception as exc:
                 self._json(500, {"error": self._failure("chat", exc)})
                 return
