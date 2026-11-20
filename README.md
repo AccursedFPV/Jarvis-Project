@@ -345,13 +345,27 @@ If you already have an account, the keys page is <https://dashboard.exa.ai/api-k
    sudo systemctl daemon-reload && sudo systemctl restart jarvis-serve
    ```
 
-2. Prove it from the box:
+2. Prove it from the box. The key lives in the service's environment, not in your shell, so a plain `jarvis search` would test the keyless scrapers and look broken. Read the key back and hand it to the tests:
 
    ```bash
-   jarvis search "best earbuds"
+   KEY=$(sudo grep -rhoE 'EXA_API_KEY=[^" ]+' /etc/jarvis.env /etc/systemd/system/jarvis-serve.service.d/ 2>/dev/null | head -1 | cut -d= -f2-)
+
+   curl -s -o /dev/null -w 'exa answered: HTTP %{http_code}\n' https://api.exa.ai/search \
+     -H 'Content-Type: application/json' -H "x-api-key: $KEY" \
+     -d '{"query":"best earbuds","numResults":3}'
+
+   sudo -u jarvis env EXA_API_KEY="$KEY" JARVIS_HOME=/var/lib/jarvis \
+     /opt/jarvis/.venv/bin/jarvis search "best earbuds"
    ```
 
-   The `engine` line must say `exa`, and `curl /health` now reports `"search": "exa"` instead of `"scrapers"`.
+   `exa answered: HTTP 200` and `engine   : exa` mean the key is good: 401 is a wrong or mistyped key, 402 means the account has no credits left, 429 is a momentary rate limit. Then check the service saw the key, without printing it:
+
+   ```bash
+   TOKEN=$(sudo grep '^JARVIS_SERVER_TOKEN=' /etc/jarvis.env | cut -d= -f2)
+   curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/health
+   ```
+
+   `/health` must report `"search": "exa"` instead of `"scrapers"`. If it still says `scrapers`, the restart missed the drop-in: `sudo systemctl daemon-reload && sudo systemctl restart jarvis-serve`.
 
 ### Run it on a VPS instead
 
