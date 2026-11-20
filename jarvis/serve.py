@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlsplit
 
+from . import __version__
 from .config import state_dir
 from .ui import UI
 
@@ -766,6 +767,7 @@ class Handler(BaseHTTPRequestHandler):
                 200,
                 {
                     "ok": True,
+                    "version": __version__,
                     "model": self.server.agent.llm.model,
                     "endpoint": self.server.agent.llm.url,
                     "skills": len(self.server.agent.toolbox.schemas()),
