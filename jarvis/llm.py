@@ -68,6 +68,11 @@ def _thinking() -> Optional[str]:
     return "enabled"
 
 
+_TOOL_CALL_TAG = re.compile(
+    r"</?(tool_call|tool_calls|function_call|tool_code)\b[^>]*>", re.IGNORECASE
+)
+
+
 def _clean_reply(text: str) -> str:
     """Remove reasoning that some GLM builds write inside the answer.
 
@@ -77,8 +82,19 @@ def _clean_reply(text: str) -> str:
     phone showed a thought, a literal </think>, and then the answer again.
     """
     lowered = text.lower()
+    if "<tool_call" in lowered or "<function_call" in lowered or "<tool_code" in lowered:
+        # A tool call written out as text is not an answer: the phone showed the
+        # literal tags and nothing happened.
+        text = re.sub(
+            r"<(tool_call|tool_calls|function_call|tool_code)\b[^>]*>.*?</\1\s*>",
+            "",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        text = _TOOL_CALL_TAG.sub("", text)
+        lowered = text.lower()
     if "<think" not in lowered and "</think" not in lowered:
-        return text
+        return text.strip()
     # Paired blocks first, so an answer that merely mentions one keeps its text.
     text = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", text, flags=re.IGNORECASE | re.DOTALL)
     lowered = text.lower()

@@ -22,7 +22,7 @@ MAX_HISTORY_MESSAGES = 120
 
 def _max_steps() -> int:
     try:
-        return max(4, min(120, int(os.environ.get("JARVIS_MAX_STEPS", "30"))))
+        return max(4, min(120, int(os.environ.get("JARVIS_MAX_STEPS", "16"))))
     except ValueError:
         return 30
 
@@ -36,7 +36,9 @@ keeping long-term memory, planning multi-step work, and writing new tools for yo
 
 How to work:
 - Do the task, end to end. Plan briefly, act, check the result, then answer. Never only describe what you would do.
-- Announcing is not acting. Never reply with only "I'll check...", "Let me..." or "I will fetch...". If the answer needs data, call the tool in that same turn. The date and time are already in this prompt, so a question about today needs no tool at all.
+- Announcing is not acting. Never reply with only "I'll check...", "Let me..." or "I will fetch...". If the answer needs data, call the tool in that same turn, with its arguments. The date and time are already in this prompt, so a question about today needs no tool at all.
+- Small talk like "how are you" is not a research task: answer it in one line from what you already know. Never search the web for it.
+- If a tool fails twice with the same arguments, stop calling it and answer with what you have, saying plainly what did not work.
 - Anything with more than two steps: call update_plan with 3-7 concrete steps, then complete_step as each one is finished.
 - If you do not know how, find out: web_search, then fetch_url the most promising page and read it before acting.
 - If you need a capability you do not have, build it: write_skill writes Python that becomes a real tool (skill_<name>) you can call right away, in this session and every later one. Keep skills small, standard library only, and call a new skill once on real input before trusting it. If it fails, read the error and fix it with write_skill again.
@@ -151,6 +153,8 @@ class Agent:
         steps = 0
         offer_tools = True
         nudged = False
+        stuck = False
+        seen: Dict[str, int] = {}
         try:
             while True:
                 reply = self.llm.chat(
@@ -175,17 +179,20 @@ class Agent:
 
                 if not reply.tool_calls:
                     text = (reply.content or "").strip()
-                    # A promise is not an answer. Asking again with the promise
-                    # quoted is what turns "I'll check the date" into a call.
-                    if not nudged and _announces(text):
-                        nudged = True
+                    # A promise is not an answer, so a promise on a turn that has
+                    # not acted yet is handed back once with the words quoted.
+                    if _announces(text):
                         self.history.pop()
-                        self._nudge = (
-                            "Your previous answer only announced an action: %r. "
-                            "Do it now by calling the tool, or answer the question directly. "
-                            "Never reply with only a promise." % text[:200]
-                        )
-                        continue
+                        if not nudged and not steps:
+                            nudged = True
+                            self._nudge = (
+                                "Your previous answer only announced an action: %r. "
+                                "If you meant to use a tool, call that tool now and give it its arguments. "
+                                "If no tool is needed, answer the question yourself. "
+                                "Never reply with only a promise." % text[:200]
+                            )
+                            continue
+                        return _GAVE_UP
                     return text
 
                 if steps + len(reply.tool_calls) > _max_steps():
@@ -199,6 +206,23 @@ class Agent:
                 for call in reply.tool_calls:
                     if on_tool:
                         on_tool()
+                    key = "%s|%s" % (call.name, (call.arguments or "").strip()[:400])
+                    seen[key] = seen.get(key, 0) + 1
+                    if seen[key] > 2:
+                        # The same call with the same arguments, a third time. It
+                        # is not going to work; stop the turn instead of looping.
+                        stuck = True
+                        if on_step:
+                            on_step("stopped repeating %s" % call.name)
+                        self.history.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call.id,
+                                "content": "ERROR: this exact call was already made twice and did not "
+                                "work. Stop calling tools and answer from what you already know.",
+                            }
+                        )
+                        continue
                     args, parse_error = _parse_arguments(call.arguments)
                     if parse_error:
                         result = "ERROR: " + parse_error
@@ -208,6 +232,9 @@ class Agent:
                             on_step(_step_label(call.name, args))
                         result = self.toolbox.run(call.name, args)
                     self.history.append({"role": "tool", "tool_call_id": call.id, "content": result})
+                if stuck:
+                    # No tools from here on: the next reply has to be an answer.
+                    offer_tools = False
         except KeyboardInterrupt:
             del self.history[checkpoint:]
             raise
@@ -215,6 +242,11 @@ class Agent:
 
 # ------------------------------------------------------------------- sessions
 
+
+_GAVE_UP = (
+    "I stopped myself there: I kept repeating the same step without getting anywhere. "
+    "Ask me again, or tell me exactly what you want me to do."
+)
 
 PROMISE = re.compile(
     r"^\W*(sure[,!]?\s*)?(i'?ll|i will|i am going to|i'm going to|i shall|let me|allow me)\b",
