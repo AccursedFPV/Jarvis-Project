@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -65,6 +66,30 @@ def _thinking() -> Optional[str]:
     if raw in {"auto", "default", "vendor"}:
         return None
     return "enabled"
+
+
+def _clean_reply(text: str) -> str:
+    """Remove reasoning that some GLM builds write inside the answer.
+
+    z.ai normally sends the chain of thought as reasoning_content, but the same
+    model sometimes emits it as content wrapped in <think>...</think>, or opens
+    the answer with the tail of its thinking and a bare </think>. Either way the
+    phone showed a thought, a literal </think>, and then the answer again.
+    """
+    lowered = text.lower()
+    if "<think" not in lowered and "</think" not in lowered:
+        return text
+    # Paired blocks first, so an answer that merely mentions one keeps its text.
+    text = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    lowered = text.lower()
+    cut = lowered.find("</think")
+    if cut != -1:
+        # An unpaired closing tag means the answer opened with thinking out loud.
+        close = text.find(">", cut)
+        if close != -1:
+            text = text[close + 1 :]
+    text = re.sub(r"</?think\b[^>]*>", "", text, flags=re.IGNORECASE)
+    return text.strip()
 
 
 def _log(message: str) -> None:
@@ -346,7 +371,7 @@ class LLM:
             ) from exc
 
         return Reply(
-            content="".join(content_parts),
+            content=_clean_reply("".join(content_parts)),
             tool_calls=[
                 ToolCall(
                     id=entry["id"] or "call_%d" % index,
@@ -381,7 +406,7 @@ def _parse_full_response(
         return Reply()
     choice = choices[0]
     message = choice.get("message") or {}
-    content = str(message.get("content") or "")
+    content = _clean_reply(str(message.get("content") or ""))
     thought = message.get("reasoning_content")
     if thought and on_reasoning:
         on_reasoning(str(thought))
