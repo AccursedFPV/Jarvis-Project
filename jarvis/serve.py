@@ -96,12 +96,12 @@ INDEX_HTML = """<!doctype html>
   #send { padding: 0 14px; height: 38px; font-size: 13px; border: 0; border-radius: 11px;
           background: var(--accent); color: #fff; font-weight: 500; min-width: 62px; }
   #send.stop { background: #b3261e; }
-  #talk { width: 100%; padding: 9px; margin-bottom: 6px; font-size: 13.5px; font-weight: 600;
-          border: 1px solid var(--line); border-radius: 11px; background: var(--surface-2);
-          color: var(--text); letter-spacing: .02em; touch-action: none;
-          user-select: none; -webkit-user-select: none; }
-  #talk.on { background: #2b1416; border-color: #5c2226; color: #ff9d9d; }
-  #send:disabled, #attach:disabled, #talk:disabled, #text:disabled { opacity: .45; }
+  #send:disabled, #attach:disabled, #text:disabled { opacity: .45; }
+  #voice { width: 100%; margin: 0 0 12px; padding: 9px 10px; font-size: 12.5px;
+           text-align: left; background: var(--surface); color: var(--text);
+           border: 1px solid var(--line); border-radius: 10px; }
+  #voice b { float: right; font-weight: 500; color: var(--muted); }
+  #voice.on b { color: #7fb0ea; }
   #drawer { position: fixed; top: 0; bottom: 0; left: 0; width: 82%; max-width: 340px;
             background: var(--bg); border-right: 1px solid var(--line); transform: translateX(-102%);
             transition: transform .18s ease; overflow-y: auto; padding: 16px 12px; z-index: 5; }
@@ -120,19 +120,35 @@ INDEX_HTML = """<!doctype html>
   .del { background: none; border: 0; color: var(--muted); font-size: 15px; padding: 4px 6px; line-height: 1; }
   #shade { position: fixed; inset: 0; background: #000a; display: none; z-index: 4; }
   #shade.open { display: block; }
-  .think { align-self: flex-start; max-width: 90%; font-size: 11.5px; color: #93a8c0;
-           border-left: 2px solid #1f3f63; padding: 1px 0 1px 10px; display: none; }
-  .think.on { display: block; }
-  .think-head { font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
-                color: #64809e; user-select: none; -webkit-user-select: none; padding: 2px 0; }
-  .think-head::after { content: "  tap to fold"; letter-spacing: 0; text-transform: none;
-                       color: #3d5674; font-size: 10px; }
-  .think-body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px;
-                max-height: 30vh; overflow-y: auto; opacity: .9; }
-  .think.folded .think-body, .think.folded .steps { display: none; }
-  .steps { margin-top: 4px; font-size: 11px; color: #7f97b3; }
-  .steps div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .steps div::before { content: "\\203A  "; color: #4a6b8c; }
+  .work { align-self: stretch; font-size: 12.5px; color: #a8b7c8; }
+  .work-head { display: flex; align-items: center; gap: 7px; padding: 3px 0;
+               font-size: 11.5px; color: #7f93a8; user-select: none; -webkit-user-select: none; }
+  .work-head .chev, .thought-head .chev, .acts-head .chev {
+    font-size: 9px; opacity: .7; transition: transform .15s ease; }
+  .work.folded .work-head .chev { transform: rotate(-90deg); }
+  .work.folded .work-body { display: none; }
+  .work-body { display: flex; flex-direction: column; gap: 7px; margin-top: 5px;
+               padding-left: 9px; border-left: 1px solid #17232f; }
+  .narr { white-space: pre-wrap; overflow-wrap: anywhere; color: #cfdae6; }
+  .spin { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+          border: 1.5px solid #2b4a6b; border-top-color: var(--accent);
+          animation: spin .7s linear infinite; }
+  .work.done .spin { display: none; }
+  .chev { flex: 0 0 auto; }
+  .work-head > span, .thought-head > span, .acts-head > span {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .thought-head, .acts-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px;
+                              color: #8399b1; user-select: none; -webkit-user-select: none; }
+  .thought.folded .chev, .acts.folded .chev { transform: rotate(-90deg); }
+  .thought.folded .thought-body, .acts.folded .acts-body { display: none; }
+  .thought-body { white-space: pre-wrap; overflow-wrap: anywhere; margin: 5px 0 0 15px;
+                  font-size: 11.5px; color: #93a8c0; opacity: .92;
+                  max-height: 26vh; overflow-y: auto; }
+  .acts-body { margin: 4px 0 0 15px; font-size: 11px; color: #7f97b3; }
+  .acts-body div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acts-body div::before { content: "\\203A  "; color: #4a6b8c; }
+
 </style>
 </head>
 <body>
@@ -142,19 +158,18 @@ INDEX_HTML = """<!doctype html>
   <span id="status">connecting...</span>
   <button id="new">New</button>
 </header>
-<main id="log"><div class="meta">Hold the button and talk, or type.</div></main>
+<main id="log"><div class="meta">Ask me anything.</div></main>
 <div class="bar">
-  <button id="talk">Hold to talk</button>
   <div id="tray"></div>
   <div class="row">
     <button id="attach" aria-label="Attach a file">+</button>
     <input id="file" type="file" multiple>
-    <input id="text" placeholder="Type instead" autocomplete="off" autocapitalize="sentences">
+    <input id="text" placeholder="Message Jarvis" autocomplete="off" autocapitalize="sentences">
     <button id="send">Send</button>
   </div>
 </div>
 <div id="shade"></div>
-<aside id="drawer"><h2>Previous chats</h2><div id="chatlist"></div></aside>
+<aside id="drawer"><button id="voice">Spoken replies<b>on</b></button><h2>Previous chats</h2><div id="chatlist"></div></aside>
 <script>
 let token = localStorage.getItem("jarvis_token") || "";
 const params = new URLSearchParams(location.search);
@@ -185,7 +200,8 @@ function setStatus(t) {
   statusBase = t;
   statusAt = Date.now();
   statusEl.textContent = t;
-  const working = t === "thinking..." || t === "sending..." || t === "recording...";
+  const working = t === "thinking..." || t === "sending..." ||
+    t === "working..." || t === "replying...";
   if (working && !statusTicker) {
     statusTicker = setInterval(function () {
       const seconds = Math.round((Date.now() - statusAt) / 1000);
@@ -199,7 +215,7 @@ function setStatus(t) {
 }
 function fail(message) {
   setStatus("offline");
-  if (message) bubble(message + " (tap hold-to-talk to retry)", "meta");
+  if (message) bubble(message + " (tap Send to retry)", "meta");
 }
 function escapeHtml(value) {
   return String(value).replace(/[&<>"]/g, function (c) {
@@ -215,20 +231,40 @@ function prettyUrl(url) {
     return host + (path.length > 24 ? path.slice(0, 24) + "..." : path);
   } catch (error) { return url; }
 }
+function linkHtml(url, label) {
+  return '<a href="' + String(url).replace(/"/g, "%22") +
+    '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+}
 function mdToHtml(text) {
-  // Only what the model is allowed to use: [label](link), bare links, **bold**.
+  // What the model is allowed to use: [label](link), bare links, bare domains,
+  // **bold**. Every one of those becomes something a thumb can tap.
   let out = escapeHtml(text);
+  const kept = [];
+  function keep(html) { kept.push(html); return "@@keep" + (kept.length - 1) + "@@"; }
   out = out.replace(/\\[([^\\]]{1,160})\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, function (match, label, url) {
-    return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+    return keep(linkHtml(url, label));
   });
-  out = out.replace(/(^|[\\s(])(https?:\\/\\/[^\\s<")]+)/g, function (match, before, url) {
-    return before + '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + prettyUrl(url) + "</a>";
+  out = out.replace(/https?:\\/\\/[^\\s<>@]+/g, function (url) {
+    const tail = (url.match(/[.,;:!?)]+$/) || [""])[0];
+    const clean = tail ? url.slice(0, -tail.length) : url;
+    return (clean ? keep(linkHtml(clean, prettyUrl(clean))) : "") + tail;
   });
-  return out.replace(/\\*\\*([^*]{1,200})\\*\\*/g, "<strong>$1</strong>");
+  // "amazon.com/dp/..." with no scheme is still a link.
+  out = out.replace(/(^|[\\s(])((?:www\\.)?(?:[a-z0-9-]+\\.)+(?:co\\.uk|com|net|org|io|ai|dev|app|uk|de|me|tv|gg|so|to|ly|xyz|shop|store|link|news|blog|fm|cc)(?:\\/[^\\s<>@]*)?)/gi,
+    function (match, before, url) {
+      const tail = (url.match(/[.,;:!?)]+$/) || [""])[0];
+      const clean = tail ? url.slice(0, -tail.length) : url;
+      return before + (clean ? keep(linkHtml("https://" + clean, clean)) : "") + tail;
+    });
+  out = out.replace(/\\*\\*([^*]{1,200})\\*\\*/g, "<strong>$1</strong>");
+  return out.replace(/@@keep(\\d+)@@/g, function (match, index) {
+    return kept[Number(index)] || "";
+  });
 }
 function shortenStep(text) {
   return String(text).replace(/https?:\\/\\/[^\\s)]+/g, function (url) { return prettyUrl(url); });
 }
+
 function bubble(content, who) {
   const div = document.createElement("div");
   div.className = "msg " + who;
@@ -325,7 +361,7 @@ async function openChat(id) {
     chatId = data.id;
     localStorage.setItem("jarvis_chat", chatId);
     log.innerHTML = "";
-    if (!data.messages.length) log.innerHTML = "<div class='meta'>Hold the button and talk, or type.</div>";
+    if (!data.messages.length) log.innerHTML = "<div class='meta'>Ask me anything.</div>";
     data.messages.forEach(renderMessage);
     log.scrollTop = log.scrollHeight;
     setStatus("ready");
@@ -338,7 +374,7 @@ async function deleteChat(id, title) {
     if (id === chatId) {
       chatId = "";
       localStorage.removeItem("jarvis_chat");
-      log.innerHTML = "<div class='meta'>Hold the button and talk, or type.</div>";
+      log.innerHTML = "<div class='meta'>Ask me anything.</div>";
       setStatus("ready");
     }
     loadChats();
@@ -361,39 +397,198 @@ function renderTray() {
     tray.appendChild(box);
   });
 }
-function speak(reply) {
-  if (!("speechSynthesis" in window)) return;
-  const utterance = new SpeechSynthesisUtterance(reply);
-  utterance.rate = 1.02;
-  speechSynthesis.cancel();
-  speechSynthesis.speak(utterance);
+let voiceOn = localStorage.getItem("jarvis_voice") !== "off";
+function voiceLabel() {
+  const el = document.getElementById("voice");
+  if (!el) return;
+  el.classList.toggle("on", voiceOn);
+  el.textContent = "Spoken replies";
+  const state = document.createElement("b");
+  state.textContent = voiceOn ? "on" : "off";
+  el.appendChild(state);
 }
+function cleanForSpeech(text) {
+  return String(text)
+    .replace(/```[\\s\\S]*?```/g, " ")
+    .replace(/\\[([^\\]]{1,120})\\]\\([^)]+\\)/g, "$1")
+    .replace(/https?:\\/\\/\\S+/g, " link ")
+    .replace(/[*_`#>|]+/g, " ")
+    .replace(/\\s+/g, " ")
+    .trim();
+}
+function unlockVoice() {
+  // Android only lets a page speak after a tap, so the first Send spends itself
+  // on a silent utterance; the real reply then plays with no gesture.
+  if (!voiceOn || !("speechSynthesis" in window) || window.jarvisVoiceReady) return;
+  try {
+    const warm = new SpeechSynthesisUtterance(" ");
+    warm.volume = 0;
+    speechSynthesis.speak(warm);
+    window.jarvisVoiceReady = true;
+  } catch (error) { /* no speech engine installed */ }
+}
+function speak(reply) {
+  if (!voiceOn || !("speechSynthesis" in window)) return;
+  const text = cleanForSpeech(reply);
+  if (!text) return;
+  try {
+    speechSynthesis.cancel();
+    // A sentence at a time: Android Chrome drops very long utterances.
+    const sentences = text.match(/[^.!?]{1,240}[.!?]?/g) || [text];
+    sentences.slice(0, 60).forEach(function (sentence) {
+      const utterance = new SpeechSynthesisUtterance(sentence.trim());
+      utterance.rate = 1.02;
+      speechSynthesis.speak(utterance);
+    });
+  } catch (error) { /* speech is a bonus, never the reply */ }
+}
+
 function setLocked(locked) {
-  ["send", "attach", "talk"].forEach(function (id) {
+  ["send", "attach"].forEach(function (id) {
     const el = document.getElementById(id);
     if (el) el.disabled = locked;
   });
   textInput.disabled = locked;
 }
-function thinkingPanel() {
-  // What the model is reasoning and which tools it reaches for, as it happens.
+const TOOL_VERBS = [
+  [/^web_search$/, "searched the web"],
+  [/^fetch_url$/, "read a page"],
+  [/^run_command$/, "ran commands"],
+  [/^(read_file|list_files|search_files)$/, "read files"],
+  [/^(write_file|make_dir|move_path|delete_path)$/, "edited files"],
+  [/^(remember|forget|learn|recall)$/, "checked memory"],
+  [/^(update_plan|complete_step)$/, "planned the work"],
+  [/^(open_target|launch_app)$/, "opened things"],
+  [/^skill_/, "used a tool"],
+];
+function verbFor(step) {
+  const name = String(step).split("(")[0].trim();
+  for (const pair of TOOL_VERBS) { if (pair[0].test(name)) return pair[1]; }
+  return "ran " + name.replace(/_/g, " ");
+}
+function secondsLabel(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) return total + "s";
+  return Math.floor(total / 60) + "m " + (total % 60) + "s";
+}
+function workPanel() {
+  // One collapsible block per turn: the thought, the tools it ran, what it said
+  // on the way - then a single "Worked for 12s" line once the answer lands.
   const panel = document.createElement("div");
-  panel.className = "think on";
+  panel.className = "work";
   const head = document.createElement("div");
-  head.className = "think-head";
-  head.textContent = "thinking";
+  head.className = "work-head";
+  const spin = document.createElement("span");
+  spin.className = "spin";
+  const label = document.createElement("span");
+  label.textContent = "Working";
+  const chev = document.createElement("span");
+  chev.className = "chev";
+  chev.textContent = "\\u203a";
+  head.appendChild(spin);
+  head.appendChild(label);
+  head.appendChild(chev);
   const body = document.createElement("div");
-  body.className = "think-body";
-  const steps = document.createElement("div");
-  steps.className = "steps";
+  body.className = "work-body";
   panel.appendChild(head);
   panel.appendChild(body);
-  panel.appendChild(steps);
   head.onclick = function () { panel.classList.toggle("folded"); };
   log.appendChild(panel);
   log.scrollTop = log.scrollHeight;
-  return { panel: panel, head: head, body: body, steps: steps };
+  const started = Date.now();
+  const ticker = setInterval(function () {
+    label.textContent = "Working " + secondsLabel(Date.now() - started);
+  }, 1000);
+  let narr = null, group = null, thought = null;
+  function scrolled() { log.scrollTop = log.scrollHeight; }
+  function chevron() {
+    const mark = document.createElement("span");
+    mark.className = "chev";
+    mark.textContent = "\\u203a";
+    return mark;
+  }
+  function openThought() {
+    if (thought) return thought;
+    const box = document.createElement("div");
+    box.className = "thought folded";
+    const top = document.createElement("div");
+    top.className = "thought-head";
+    top.appendChild(chevron());
+    const title = document.createElement("span");
+    title.textContent = "Thought";
+    top.appendChild(title);
+    const text = document.createElement("div");
+    text.className = "thought-body";
+    box.appendChild(top);
+    box.appendChild(text);
+    top.onclick = function () { box.classList.toggle("folded"); };
+    body.appendChild(box);
+    thought = { body: text };
+    return thought;
+  }
+  return {
+    panel: panel,
+    think: function (text) {
+      const view = openThought();
+      view.body.textContent += text;
+      view.body.scrollTop = view.body.scrollHeight;
+      scrolled();
+    },
+    say: function (text) {
+      if (!narr) {
+        narr = document.createElement("div");
+        narr.className = "narr";
+        body.appendChild(narr);
+        group = null;
+      }
+      narr.textContent += text;
+      scrolled();
+    },
+    step: function (text) {
+      // Words came after a tool call, so the next text is a new message.
+      narr = null;
+      if (!group) {
+        const box = document.createElement("div");
+        box.className = "acts folded";
+        const top = document.createElement("div");
+        top.className = "acts-head";
+        const lines = document.createElement("div");
+        lines.className = "acts-body";
+        box.appendChild(top);
+        box.appendChild(lines);
+        top.onclick = function () { box.classList.toggle("folded"); };
+        body.appendChild(box);
+        group = { head: top, body: lines, verbs: [] };
+      }
+      const verb = verbFor(text);
+      if (group.verbs.indexOf(verb) === -1) group.verbs.push(verb);
+      const line = document.createElement("div");
+      line.textContent = shortenStep(text);
+      line.title = text;
+      group.body.appendChild(line);
+      const verbs = group.verbs.slice();
+      const first = verbs.shift() || "worked";
+      group.head.textContent = "";
+      group.head.appendChild(chevron());
+      const title = document.createElement("span");
+      title.textContent = first.charAt(0).toUpperCase() + first.slice(1) +
+        (verbs.length ? ", " + verbs.join(", ") : "");
+      group.head.appendChild(title);
+      scrolled();
+    },
+    partial: function () { return narr ? narr.textContent : ""; },
+    finish: function () {
+      clearInterval(ticker);
+      panel.classList.add("done", "folded");
+      label.textContent = "Worked for " + secondsLabel(Date.now() - started);
+      // The last streamed text is moved out as the answer, so drop the copy.
+      if (narr) { narr.remove(); narr = null; }
+      if (!body.children.length) panel.remove();
+      scrolled();
+    },
+  };
 }
+
 function setSendMode(mode) {
   const el = document.getElementById("send");
   if (!el) return;
@@ -420,6 +615,8 @@ async function send(message) {
   if (sending) return;
   sending = true;
   stopping = false;
+  unlockVoice();
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
   activeTurn = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
   controller = new AbortController();
   setLocked(true);
@@ -431,28 +628,16 @@ async function send(message) {
   files.forEach(function (item) { showAttachment(shown, item.name, item.kind, item.preview); });
   setStatus("thinking...");
 
-  const view = thinkingPanel();
-  let answer = null;
-  function answerBubble() {
-    if (!answer) {
-      answer = bubble("", "jarvis");
-      view.panel.classList.add("folded");
-    }
-    return answer;
-  }
+  const view = workPanel();
   function handle(event) {
     if (event.t === "think") {
-      view.body.textContent += event.d;
+      view.think(event.d);
     } else if (event.t === "step") {
-      const line = document.createElement("div");
-      line.textContent = shortenStep(event.d);
-      line.title = event.d;
-      view.steps.appendChild(line);
-      view.head.textContent = "working";
-      // Anything written before a tool ran was narration, not the answer.
-      if (answer) { answer.textContent = ""; }
+      view.step(event.d);
+      setStatus("working...");
     } else if (event.t === "say") {
-      answerBubble().textContent += event.d;
+      view.say(event.d);
+      setStatus("replying...");
     } else if (event.t === "error") {
       throw new Error(event.d);
     } else if (event.t === "done") {
@@ -461,10 +646,12 @@ async function send(message) {
         localStorage.setItem("jarvis_chat", chatId);
       }
       const text = event.reply || "(empty reply)";
-      answerBubble().innerHTML = mdToHtml(text);
+      // The work folds away, the answer takes its place, and the phone says it.
+      view.finish();
+      bubble(text, "jarvis");
       speak(text);
+      log.scrollTop = log.scrollHeight;
     }
-    log.scrollTop = log.scrollHeight;
   }
 
   try {
@@ -497,17 +684,21 @@ async function send(message) {
     setStatus("ready");
   } catch (error) {
     if (stopping || error.name === "AbortError") {
-      if (answer && !answer.textContent.trim()) answer.textContent = "(stopped)";
+      const partial = view.partial().trim();
+      view.finish();
+      if (partial) bubble(partial, "jarvis");
       const note = document.createElement("div");
       note.className = "meta";
       note.textContent = "stopped";
       log.appendChild(note);
       log.scrollTop = log.scrollHeight;
       setStatus("ready");
-    } else { fail(error.message); }
+    } else {
+      view.finish();
+      fail(error.message);
+    }
   }
   finally {
-    if (!view.body.textContent && !view.steps.children.length) view.panel.remove();
     sending = false;
     stopping = false;
     activeTurn = "";
@@ -516,6 +707,7 @@ async function send(message) {
     setLocked(false);
   }
 }
+
 document.getElementById("send").onclick = function () {
   if (sending) { stopTurn(); return; }
   const value = textInput.value.trim();
@@ -533,7 +725,7 @@ document.getElementById("new").onclick = async function () {
     const data = await api("/chats", { method: "POST" });
     chatId = data.id;
     localStorage.setItem("jarvis_chat", chatId);
-    log.innerHTML = "<div class='meta'>Hold the button and talk, or type.</div>";
+    log.innerHTML = "<div class='meta'>Ask me anything.</div>";
     setStatus("ready");
     toggleDrawer(false);
   } catch (error) { fail(error.message); }
@@ -560,89 +752,15 @@ fileInput.onchange = async function () {
   }
   fileInput.value = "";
 };
-let recording = false, chunks = [], ctx = null, stream = null, node = null;
-async function startRecording() {
-  if (recording) return;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
-    ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = ctx.createMediaStreamSource(stream);
-    node = ctx.createScriptProcessor(2048, 1, 1);
-    const mute = ctx.createGain();
-    mute.gain.value = 0;
-    chunks = [];
-    node.onaudioprocess = function (event) { chunks.push(new Float32Array(event.inputBuffer.getChannelData(0))); };
-    source.connect(node);
-    node.connect(mute);
-    mute.connect(ctx.destination);
-    recording = true;
-    const talk = document.getElementById("talk");
-    talk.classList.add("on");
-    talk.textContent = "Listening - release to send";
-    setStatus("recording...");
-  } catch (error) { fail("Microphone blocked: " + error.message); }
-}
-function downsampled(rate) {
-  const total = chunks.reduce(function (n, chunk) { return n + chunk.length; }, 0);
-  const joined = new Float32Array(total);
-  let offset = 0;
-  for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.length; }
-  const ratio = rate / 16000;
-  if (ratio <= 1) return joined;
-  const length = Math.floor(joined.length / ratio);
-  const out = new Float32Array(length);
-  for (let i = 0; i < length; i++) {
-    const start = Math.floor(i * ratio), end = Math.min(Math.floor((i + 1) * ratio), joined.length);
-    let sum = 0;
-    for (let j = start; j < end; j++) sum += joined[j];
-    out[i] = sum / Math.max(1, end - start);
-  }
-  return out;
-}
-function wavBlob(samples, rate) {
-  const buffer = new ArrayBuffer(44 + samples.length * 2);
-  const view = new DataView(buffer);
-  const write = function (offset, string) { for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i)); };
-  write(0, "RIFF"); view.setUint32(4, 36 + samples.length * 2, true); write(8, "WAVE"); write(12, "fmt ");
-  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-  write(36, "data"); view.setUint32(40, samples.length * 2, true);
-  let offset = 44;
-  for (const sample of samples) {
-    const value = Math.max(-1, Math.min(1, sample));
-    view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
-    offset += 2;
-  }
-  return new Blob([view], { type: "audio/wav" });
-}
-async function stopRecording() {
-  if (!recording) return;
-  recording = false;
-  const talk = document.getElementById("talk");
-  talk.classList.remove("on");
-  talk.textContent = "Hold to talk";
-  const rate = ctx ? ctx.sampleRate : 48000;
-  if (node) node.onaudioprocess = null;
-  if (stream) stream.getTracks().forEach(function (track) { track.stop(); });
-  if (ctx) ctx.close();
-  const blob = wavBlob(downsampled(rate), 16000);
-  setStatus("sending...");
-  try {
-    const data = await api("/voice?chat=" + encodeURIComponent(chatId), { method: "POST", headers: { "Content-Type": "audio/wav" }, body: blob });
-    if (data.heard) bubble(data.heard, "you");
-    bubble(data.reply || "(empty reply)", "jarvis");
-    chatId = data.chat || chatId;
-    localStorage.setItem("jarvis_chat", chatId);
-    setStatus("ready");
-    speak(data.reply || "");
-  } catch (error) { fail(error.message); }
-}
-const talkButton = document.getElementById("talk");
-talkButton.addEventListener("pointerdown", function (event) { event.preventDefault(); startRecording(); });
-talkButton.addEventListener("pointerup", function (event) { event.preventDefault(); stopRecording(); });
-talkButton.addEventListener("pointercancel", stopRecording);
-talkButton.addEventListener("pointerleave", function () { if (recording) stopRecording(); });
-document.querySelector("form") && document.querySelector("form").addEventListener("submit", function (e) { e.preventDefault(); });
+const voiceButton = document.getElementById("voice");
+voiceLabel();
+if (voiceButton) voiceButton.onclick = function () {
+  voiceOn = !voiceOn;
+  localStorage.setItem("jarvis_voice", voiceOn ? "on" : "off");
+  voiceLabel();
+  if (!voiceOn && "speechSynthesis" in window) speechSynthesis.cancel();
+};
+
 
 fetch("/health", { headers: { "Authorization": "Bearer " + token } })
   .then(function (response) { return response.ok ? response.json() : Promise.reject(new Error("no auth")); })

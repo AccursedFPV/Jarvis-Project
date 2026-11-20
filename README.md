@@ -310,7 +310,7 @@ Phone: http://<this-pc>:8787/?token=3f9c...
 
 The token is stored in the phone's local storage after the first load, so the URL works normally afterwards. It lives in `~/.jarvis/server_token`; delete that file (or set `JARVIS_SERVER_TOKEN`) to change it. **Never port-forward 8787 to the internet** — Tailscale is the secure path, the token is the second lock.
 
-**Talking to it from the phone:** hold *Hold to talk*, speak, release. The phone records a WAV, sends it to your PC, and your PC transcribes it with the same local Whisper model — no Google, no cloud. The reply is spoken by the phone's own voice engine.
+**Talking to it from the phone:** type or attach a photo, and the answer comes back in the chat. When a turn finishes the phone reads it aloud with its own voice engine; the *Spoken replies* switch at the top of the Chats drawer turns that off. While Jarvis works, the chat shows a folding activity block — a *Thought* section, what it said on the way, and the searches or commands it ran, grouped like "Searched the web, read pages" — which closes to a single *Worked for 12s* line when the answer arrives. Links in a reply are tappable, whether or not they start with `https://`.
 
 **What the phone can actually do:**
 
@@ -321,7 +321,7 @@ The token is stored in the phone's local storage after the first load, so the UR
 **Limits worth knowing:**
 
 - **The PC must be awake.** If it sleeps, the phone has nothing to talk to. Set Windows to stay awake, or enable Wake-on-LAN and wake it first. A ~$4–6/month VPS could hold the server for when the PC is off, but the 8B+ model still needs the PC's GPU — that's the real reason to keep the PC on.
-- **Real "Hey Jarvis" on the phone needs an Android app.** A browser tab cannot listen in the background (and Android suspends the mic when the screen locks), so the web client is hold-to-talk. A small Android app with a foreground service could run the same `hey_jarvis` model on the phone and call this server — that is the next piece, and the API is already there for it (`POST /chat`, `POST /voice`, `GET /health`).
+- **Real "Hey Jarvis" on the phone needs an Android app.** A browser tab cannot listen in the background (and Android suspends the mic when the screen locks), so the web client is typed input with spoken replies, and the hold-to-talk microphone is parked for now. A small Android app with a foreground service could run the same `hey_jarvis` model on the phone and call this server — that is the next piece, and the API is already there for it (`POST /chat`, `POST /voice`, `GET /health`).
 - Your conversation and memory now travel over your private network to your own PC. Still yours, not a third party's.
 
 ### Run it on a VPS instead
