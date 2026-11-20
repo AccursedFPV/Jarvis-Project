@@ -7,6 +7,8 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Dict, List, Optional
 
 
@@ -29,9 +31,10 @@ class Reply:
 
 
 class _Retry(Exception):
-    def __init__(self, message: str, partial: bool = False) -> None:
+    def __init__(self, message: str, partial: bool = False, wait: Optional[float] = None) -> None:
         super().__init__(message)
         self.partial = partial
+        self.wait = wait
 
 
 class LLM:
@@ -51,15 +54,19 @@ class LLM:
         temperature: float = 0.4,
         on_token: Optional[Callable[[str], None]] = None,
     ) -> Reply:
+        attempts = 4
         last: Optional[_Retry] = None
-        for attempt in range(3):
+        for attempt in range(attempts):
             try:
                 return self._stream(messages, tools, temperature, on_token)
             except _Retry as exc:
                 last = exc
-                if exc.partial or attempt == 2:
+                if exc.partial or attempt == attempts - 1:
                     break
-                time.sleep(1.5 * (attempt + 1))
+                # A free tier throttles per minute, so 1.5s is not enough; the
+                # vendor's own Retry-After wins when it sends one.
+                delay = exc.wait if exc.wait is not None else 2.0 * (3 ** attempt)
+                time.sleep(max(0.0, min(delay, 30.0)))
         raise LLMError(str(last) if last else "The model request failed.")
 
     # ------------------------------------------------------------------ stream
@@ -146,7 +153,7 @@ class LLM:
             detail = _read_error_body(exc)
             message = _http_error_message(exc.code, detail)
             if exc.code == 429 or exc.code >= 500:
-                raise _Retry(message) from exc
+                raise _Retry(message, wait=_retry_after(exc.headers)) from exc
             raise LLMError(message) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             reason = getattr(exc, "reason", exc)
@@ -216,6 +223,29 @@ def _short(value: str, limit: int) -> str:
     return value[: limit - 3].rstrip() + "..."
 
 
+def _retry_after(headers: Any) -> Optional[float]:
+    """Seconds the server asked us to wait, in either form Retry-After allows."""
+    try:
+        raw = (headers.get("Retry-After") or "").strip() if headers else ""
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
 def _read_error_body(exc: urllib.error.HTTPError) -> str:
     try:
         raw = exc.read().decode("utf-8", "replace").strip()
@@ -249,7 +279,7 @@ def _http_error_message(code: int, detail: str) -> str:
         402: "the account is out of credit or the plan does not cover this endpoint",
         403: "access denied for this key, model or endpoint",
         404: "the endpoint or model was not found - check JARVIS_BASE_URL and JARVIS_MODEL",
-        429: "rate limit reached - wait a moment and try again",
+        429: "the free tier allows only a few model calls per minute - wait a few seconds and ask again",
     }
     message = "Model API error %d: %s" % (code, hints.get(code, "request failed"))
     if detail:
