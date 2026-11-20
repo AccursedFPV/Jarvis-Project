@@ -12,12 +12,17 @@ import base64
 import hmac
 import io
 import json
+import mimetypes
 import os
+import re
 import secrets
 import sys
 import threading
+import time
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlsplit
 
@@ -43,32 +48,69 @@ INDEX_HTML = """<!doctype html>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body { margin: 0; font: 16px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
-         background: #0d1117; color: #e6edf3; display: flex; flex-direction: column; height: 100dvh; }
-  header { display: flex; align-items: baseline; gap: 10px; padding: 14px 16px 8px; }
+         background: #0d1117; color: #e6edf3; display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+  header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 8px; }
   h1 { font-size: 15px; letter-spacing: .28em; margin: 0; font-weight: 600; color: #58a6ff; }
-  #status { font-size: 12px; color: #8b949e; }
+  #status { font-size: 12px; color: #8b949e; flex: 1; min-width: 0; }
+  header button { background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 10px;
+                  padding: 6px 10px; font-size: 13px; }
   #log { flex: 1; overflow-y: auto; padding: 8px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
   .msg { max-width: 92%; padding: 10px 13px; border-radius: 14px; white-space: pre-wrap; word-wrap: break-word; }
   .you { align-self: flex-end; background: #1f6feb; color: #fff; border-bottom-right-radius: 4px; }
   .jarvis { align-self: flex-start; background: #161b22; border: 1px solid #21262d; border-bottom-left-radius: 4px; }
-  .meta { align-self: center; font-size: 12px; color: #8b949e; }
+  .meta { align-self: center; font-size: 12px; color: #8b949e; text-align: center; }
+  .msg img { max-width: 100%; border-radius: 10px; margin-top: 6px; display: block; }
+  .attach-name { display: block; margin-top: 6px; font-size: 12px; opacity: .85; }
   .bar { padding: 10px 12px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid #21262d; background: #0d1117; }
-  #talk { width: 100%; padding: 16px; font-size: 17px; font-weight: 600; border: 0; border-radius: 14px;
-          background: #238636; color: #fff; touch-action: none; user-select: none; -webkit-user-select: none; }
+  #tray { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; }
+  #tray:empty { display: none; }
+  #tray img { height: 54px; border-radius: 8px; border: 1px solid #30363d; display: block; }
+  .thumb { flex: 0 0 auto; font-size: 11px; color: #8b949e; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  #attach { width: 46px; height: 46px; font-size: 22px; line-height: 1; border-radius: 12px;
+            border: 1px solid #30363d; background: #161b22; color: #e6edf3; }
+  #file { display: none; }
+  #text { flex: 1; min-width: 0; padding: 12px; font-size: 16px; border-radius: 12px;
+          border: 1px solid #30363d; background: #161b22; color: #e6edf3; }
+  #send { padding: 0 16px; height: 46px; font-size: 15px; border: 0; border-radius: 12px; background: #1f6feb; color: #fff; }
+  #talk { width: 100%; padding: 14px; margin-bottom: 8px; font-size: 16px; font-weight: 600; border: 0;
+          border-radius: 14px; background: #238636; color: #fff; touch-action: none;
+          user-select: none; -webkit-user-select: none; }
   #talk.on { background: #da3633; }
-  form { display: flex; gap: 8px; margin-top: 8px; }
-  input { flex: 1; padding: 12px; font-size: 16px; border-radius: 12px; border: 1px solid #30363d;
-          background: #161b22; color: #e6edf3; }
-  form button { padding: 0 16px; font-size: 15px; border: 0; border-radius: 12px; background: #1f6feb; color: #fff; }
+  #drawer { position: fixed; top: 0; bottom: 0; left: 0; width: 80%; max-width: 330px; background: #0d1117;
+            border-right: 1px solid #21262d; transform: translateX(-102%); transition: transform .18s ease;
+            overflow-y: auto; padding: 16px; z-index: 5; }
+  #drawer.open { transform: none; }
+  #drawer h2 { font-size: 12px; letter-spacing: .18em; color: #8b949e; margin: 4px 0 12px; font-weight: 600; }
+  .chat { padding: 10px 12px; border-radius: 10px; margin-bottom: 6px; background: #161b22;
+          border: 1px solid #21262d; }
+  .chat b { display: block; font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat small { color: #8b949e; font-size: 11px; }
+  .chat.active { border-color: #1f6feb; }
+  #shade { position: fixed; inset: 0; background: #000a; display: none; z-index: 4; }
+  #shade.open { display: block; }
 </style>
 </head>
 <body>
-<header><h1>JARVIS</h1><span id="status">connecting...</span></header>
+<header>
+  <button id="chats">Chats</button>
+  <h1>JARVIS</h1>
+  <span id="status">connecting...</span>
+  <button id="new">New</button>
+</header>
 <main id="log"><div class="meta">Hold the button and talk, or type.</div></main>
 <div class="bar">
   <button id="talk">Hold to talk</button>
-  <form id="form"><input id="text" placeholder="Type instead" autocomplete="off" autocapitalize="sentences"><button>Send</button></form>
+  <div id="tray"></div>
+  <div class="row">
+    <button id="attach" aria-label="Attach a file">+</button>
+    <input id="file" type="file" multiple>
+    <input id="text" placeholder="Type instead" autocomplete="off" autocapitalize="sentences">
+    <button id="send">Send</button>
+  </div>
 </div>
+<div id="shade"></div>
+<aside id="drawer"><h2>Previous chats</h2><div id="chatlist"></div></aside>
 <script>
 let token = localStorage.getItem("jarvis_token") || "";
 const params = new URLSearchParams(location.search);
@@ -78,34 +120,115 @@ if (params.get("token")) {
   history.replaceState(null, "", "/");
 }
 const log = document.getElementById("log");
-const status = document.getElementById("status");
-const talk = document.getElementById("talk");
-const form = document.getElementById("form");
-const text = document.getElementById("text");
+const statusEl = document.getElementById("status");
+const textInput = document.getElementById("text");
+const tray = document.getElementById("tray");
+const fileInput = document.getElementById("file");
+const drawer = document.getElementById("drawer");
+const shade = document.getElementById("shade");
+const chatlist = document.getElementById("chatlist");
+let chatId = localStorage.getItem("jarvis_chat") || "";
+let pending = [];
 
-function setStatus(t) { status.textContent = t; }
-function bubble(text, who) {
-  const div = document.createElement("div");
-  div.className = "msg " + who;
-  div.textContent = text;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
-  return div;
-}
+function setStatus(t) { statusEl.textContent = t; }
 function fail(message) {
   setStatus("offline");
   if (message) bubble(message + " (tap hold-to-talk to retry)", "meta");
 }
-
-async function send(path, body, type) {
-  if (!token) { token = prompt("Jarvis token (shown on the PC when the server starts):") || ""; localStorage.setItem("jarvis_token", token); }
-  const response = await fetch(path, { method: "POST", headers: { "Authorization": "Bearer " + token, "Content-Type": type }, body: body });
+function bubble(content, who) {
+  const div = document.createElement("div");
+  div.className = "msg " + who;
+  div.textContent = content;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+function fileUrl(name) { return "/file?name=" + encodeURIComponent(name) + "&token=" + encodeURIComponent(token); }
+function showAttachment(parent, name, kind, preview) {
+  if (kind === "image") {
+    const img = document.createElement("img");
+    img.src = preview || fileUrl(name);
+    img.alt = name;
+    parent.appendChild(img);
+  } else {
+    const span = document.createElement("span");
+    span.className = "attach-name";
+    span.textContent = "file: " + name;
+    parent.appendChild(span);
+  }
+}
+function renderMessage(message) {
+  const div = bubble(message.text || "", message.role === "user" ? "you" : "jarvis");
+  (message.files || []).forEach(function (item) { showAttachment(div, item.name, item.kind); });
+}
+async function api(path, options) {
+  options = options || {};
+  options.headers = Object.assign({ "Authorization": "Bearer " + token }, options.headers || {});
+  const response = await fetch(path, options);
   if (response.status === 401) { localStorage.removeItem("jarvis_token"); throw new Error("Wrong or missing token."); }
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
   return data;
 }
-
+function toggleDrawer(open) {
+  drawer.classList.toggle("open", open);
+  shade.classList.toggle("open", open);
+  if (open) loadChats();
+}
+async function loadChats() {
+  try {
+    const data = await api("/chats");
+    chatlist.innerHTML = "";
+    if (!data.chats.length) {
+      const empty = document.createElement("div");
+      empty.className = "meta";
+      empty.textContent = "No chats yet.";
+      chatlist.appendChild(empty);
+      return;
+    }
+    data.chats.forEach(function (item) {
+      const row = document.createElement("div");
+      row.className = "chat" + (item.id === chatId ? " active" : "");
+      const title = document.createElement("b");
+      title.textContent = item.title;
+      const meta = document.createElement("small");
+      meta.textContent = item.when + " - " + item.count + " messages";
+      row.appendChild(title);
+      row.appendChild(meta);
+      row.onclick = function () { openChat(item.id); toggleDrawer(false); };
+      chatlist.appendChild(row);
+    });
+  } catch (error) { setStatus("offline"); }
+}
+async function openChat(id) {
+  try {
+    const data = await api("/chats/" + encodeURIComponent(id));
+    chatId = data.id;
+    localStorage.setItem("jarvis_chat", chatId);
+    log.innerHTML = "";
+    if (!data.messages.length) log.innerHTML = "<div class='meta'>Hold the button and talk, or type.</div>";
+    data.messages.forEach(renderMessage);
+    log.scrollTop = log.scrollHeight;
+    setStatus("ready");
+  } catch (error) { fail(error.message); }
+}
+function renderTray() {
+  tray.innerHTML = "";
+  pending.forEach(function (item, index) {
+    const box = document.createElement("div");
+    box.className = "thumb";
+    if (item.kind === "image") {
+      const img = document.createElement("img");
+      img.src = item.preview;
+      img.alt = item.name;
+      box.appendChild(img);
+    } else {
+      box.textContent = item.name;
+    }
+    box.onclick = function () { pending.splice(index, 1); renderTray(); };
+    tray.appendChild(box);
+  });
+}
 function speak(reply) {
   if (!("speechSynthesis" in window)) return;
   const utterance = new SpeechSynthesisUtterance(reply);
@@ -113,28 +236,70 @@ function speak(reply) {
   speechSynthesis.cancel();
   speechSynthesis.speak(utterance);
 }
-
-async function ask(message) {
-  bubble(message, "you");
+async function send(message) {
+  const files = pending.slice();
+  pending = [];
+  renderTray();
+  const shown = bubble(message || "(" + files.length + " attachment(s))", "you");
+  files.forEach(function (item) { showAttachment(shown, item.name, item.kind, item.preview); });
   setStatus("thinking...");
   try {
-    const data = await send("/chat", JSON.stringify({ message }), "application/json");
+    const data = await api("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: message, chat: chatId, files: files.map(function (item) { return { name: item.name, kind: item.kind }; }) })
+    });
+    chatId = data.chat;
+    localStorage.setItem("jarvis_chat", chatId);
     bubble(data.reply || "(empty reply)", "jarvis");
     setStatus("ready");
     speak(data.reply || "");
   } catch (error) { fail(error.message); }
 }
-
-form.addEventListener("submit", event => {
-  event.preventDefault();
-  const value = text.value.trim();
-  if (!value) return;
-  text.value = "";
-  ask(value);
+document.getElementById("send").onclick = function () {
+  const value = textInput.value.trim();
+  if (!value && !pending.length) return;
+  textInput.value = "";
+  send(value);
+};
+textInput.addEventListener("keydown", function (event) {
+  if (event.key === "Enter") { event.preventDefault(); document.getElementById("send").click(); }
 });
-
+document.getElementById("chats").onclick = function () { toggleDrawer(true); };
+shade.onclick = function () { toggleDrawer(false); };
+document.getElementById("new").onclick = async function () {
+  try {
+    const data = await api("/chats", { method: "POST" });
+    chatId = data.id;
+    localStorage.setItem("jarvis_chat", chatId);
+    log.innerHTML = "<div class='meta'>Hold the button and talk, or type.</div>";
+    setStatus("ready");
+    toggleDrawer(false);
+  } catch (error) { fail(error.message); }
+};
+document.getElementById("attach").onclick = function () { fileInput.click(); };
+fileInput.onchange = async function () {
+  const chosen = Array.from(fileInput.files || []);
+  for (const file of chosen) {
+    try {
+      const response = await fetch("/upload?name=" + encodeURIComponent(file.name), {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token, "Content-Type": file.type || "application/octet-stream" },
+        body: file
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "upload failed");
+      pending.push({
+        name: data.name,
+        kind: data.kind,
+        preview: file.type.indexOf("image/") === 0 ? URL.createObjectURL(file) : ""
+      });
+      renderTray();
+    } catch (error) { fail(error.message); }
+  }
+  fileInput.value = "";
+};
 let recording = false, chunks = [], ctx = null, stream = null, node = null;
-
 async function startRecording() {
   if (recording) return;
   try {
@@ -145,19 +310,19 @@ async function startRecording() {
     const mute = ctx.createGain();
     mute.gain.value = 0;
     chunks = [];
-    node.onaudioprocess = event => { chunks.push(new Float32Array(event.inputBuffer.getChannelData(0))); };
+    node.onaudioprocess = function (event) { chunks.push(new Float32Array(event.inputBuffer.getChannelData(0))); };
     source.connect(node);
     node.connect(mute);
     mute.connect(ctx.destination);
     recording = true;
+    const talk = document.getElementById("talk");
     talk.classList.add("on");
     talk.textContent = "Listening - release to send";
     setStatus("recording...");
   } catch (error) { fail("Microphone blocked: " + error.message); }
 }
-
 function downsampled(rate) {
-  const total = chunks.reduce((n, chunk) => n + chunk.length, 0);
+  const total = chunks.reduce(function (n, chunk) { return n + chunk.length; }, 0);
   const joined = new Float32Array(total);
   let offset = 0;
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.length; }
@@ -173,11 +338,10 @@ function downsampled(rate) {
   }
   return out;
 }
-
 function wavBlob(samples, rate) {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
-  const write = (offset, string) => { for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i)); };
+  const write = function (offset, string) { for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i)); };
   write(0, "RIFF"); view.setUint32(4, 36 + samples.length * 2, true); write(8, "WAVE"); write(12, "fmt ");
   view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
   view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
@@ -190,36 +354,42 @@ function wavBlob(samples, rate) {
   }
   return new Blob([view], { type: "audio/wav" });
 }
-
 async function stopRecording() {
   if (!recording) return;
   recording = false;
+  const talk = document.getElementById("talk");
   talk.classList.remove("on");
   talk.textContent = "Hold to talk";
   const rate = ctx ? ctx.sampleRate : 48000;
   if (node) node.onaudioprocess = null;
-  if (stream) stream.getTracks().forEach(track => track.stop());
+  if (stream) stream.getTracks().forEach(function (track) { track.stop(); });
   if (ctx) ctx.close();
   const blob = wavBlob(downsampled(rate), 16000);
   setStatus("sending...");
   try {
-    const data = await send("/voice", blob, "audio/wav");
+    const data = await api("/voice?chat=" + encodeURIComponent(chatId), { method: "POST", headers: { "Content-Type": "audio/wav" }, body: blob });
     if (data.heard) bubble(data.heard, "you");
     bubble(data.reply || "(empty reply)", "jarvis");
+    chatId = data.chat || chatId;
+    localStorage.setItem("jarvis_chat", chatId);
     setStatus("ready");
     speak(data.reply || "");
   } catch (error) { fail(error.message); }
 }
-
-talk.addEventListener("pointerdown", event => { event.preventDefault(); startRecording(); });
-talk.addEventListener("pointerup", event => { event.preventDefault(); stopRecording(); });
-talk.addEventListener("pointercancel", stopRecording);
-talk.addEventListener("pointerleave", () => { if (recording) stopRecording(); });
+const talkButton = document.getElementById("talk");
+talkButton.addEventListener("pointerdown", function (event) { event.preventDefault(); startRecording(); });
+talkButton.addEventListener("pointerup", function (event) { event.preventDefault(); stopRecording(); });
+talkButton.addEventListener("pointercancel", stopRecording);
+talkButton.addEventListener("pointerleave", function () { if (recording) stopRecording(); });
+document.querySelector("form") && document.querySelector("form").addEventListener("submit", function (e) { e.preventDefault(); });
 
 fetch("/health", { headers: { "Authorization": "Bearer " + token } })
-  .then(response => response.ok ? response.json() : Promise.reject(new Error("no auth")))
-  .then(data => setStatus(data.model + " - ready"))
-  .catch(() => setStatus(token ? "token rejected - reload with ?token=" : "no token - reload with ?token="));
+  .then(function (response) { return response.ok ? response.json() : Promise.reject(new Error("no auth")); })
+  .then(function (data) { setStatus(data.model + " - ready"); })
+  .catch(function () { setStatus(token ? "token rejected - reload with ?token=" : "no token - reload with ?token="); });
+
+loadChats();
+if (chatId) openChat(chatId);
 </script>
 </body>
 </html>
@@ -277,6 +447,78 @@ def _decode_wav(raw: bytes) -> Any:
 # --------------------------------------------------------------------- server
 
 
+class Chats:
+    """Conversations on disk, so an old one can be reopened from the phone."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _file(self, chat_id: str) -> Path:
+        safe = re.sub(r"[^A-Za-z0-9_-]", "", chat_id or "")[:64]
+        return self.root / (safe + ".json")
+
+    def _read(self, chat_id: str) -> Optional[dict]:
+        path = self._file(chat_id)
+        if not (chat_id and path.is_file()):
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict) or not data.get("id"):
+            return None
+        data.setdefault("messages", [])
+        return data
+
+    def _write(self, data: dict) -> None:
+        path = self._file(str(data["id"]))
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
+        temp.replace(path)
+
+    def new(self, title: str = "") -> dict:
+        chat_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2)
+        data = {"id": chat_id, "title": title or "New chat", "updated": time.time(), "messages": []}
+        self._write(data)
+        return data
+
+    def load(self, chat_id: str) -> Optional[dict]:
+        return self._read(chat_id)
+
+    def listing(self) -> list:
+        items = []
+        for path in self.root.glob("*.json"):
+            data = self._read(path.stem)
+            if not data:
+                continue
+            updated = float(data.get("updated") or 0)
+            items.append(
+                {
+                    "id": data["id"],
+                    "title": data.get("title") or "Chat",
+                    "count": len(data.get("messages") or []),
+                    "when": time.strftime("%d %b %H:%M", time.localtime(updated)),
+                    "_at": updated,
+                }
+            )
+        items.sort(key=lambda item: item["_at"], reverse=True)
+        for item in items:
+            item.pop("_at", None)
+        return items[:60]
+
+    def append(self, data: dict, message: dict) -> dict:
+        text = str(message.get("text") or "").strip()
+        if not text and not message.get("files"):
+            return data
+        data.setdefault("messages", []).append(message)
+        if len(data["messages"]) == 1 and message.get("role") == "user":
+            data["title"] = text[:48] or "Chat"
+        data["updated"] = time.time()
+        self._write(data)
+        return data
+
+
 class JarvisServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -294,10 +536,28 @@ class JarvisServer(ThreadingHTTPServer):
         self.token = token
         self.lock = threading.Lock()
         self._transcriber = transcriber
+        self.chats = Chats(state_dir() / "chats")
+        self.uploads = state_dir() / "uploads"
+        self.uploads.mkdir(parents=True, exist_ok=True)
 
-    def chat(self, message: str) -> str:
+    def conversation(self, chat_id: str) -> dict:
+        data = self.chats.load(chat_id) if chat_id else None
+        return data or self.chats.new()
+
+    def chat(self, message: str, chat_id: str = "", files: Any = None) -> Any:
         with self.lock:
-            return self.agent.chat(message)
+            data = self.conversation(chat_id)
+            # Continue from the stored transcript, not from whatever an earlier
+            # phone session left in memory.
+            self.agent.history = [
+                {"role": item["role"], "content": item.get("text") or ""}
+                for item in data.get("messages", [])
+                if item.get("text") and item.get("role") in {"user", "assistant"}
+            ]
+            reply = self.agent.chat(message)
+            self.chats.append(data, {"role": "user", "text": message, "files": files or []})
+            self.chats.append(data, {"role": "assistant", "text": reply})
+            return reply, data["id"]
 
     def transcribe(self, audio: Any) -> str:
         if self._transcriber is None:
@@ -394,6 +654,36 @@ class Handler(BaseHTTPRequestHandler):
         if parts.path == "/icon-512.png":
             self._send(200, ICON_512, "image/png")
             return
+        if parts.path == "/chats":
+            if not self._authorised(query):
+                self._json(401, {"error": "unauthorised"})
+                return
+            self._json(200, {"chats": self.server.chats.listing()})
+            return
+        if parts.path.startswith("/chats/"):
+            if not self._authorised(query):
+                self._json(401, {"error": "unauthorised"})
+                return
+            data = self.server.chats.load(parts.path.split("/", 2)[2])
+            if data is None:
+                self._json(404, {"error": "no such chat"})
+                return
+            self._json(
+                200,
+                {"id": data["id"], "title": data.get("title"), "messages": data.get("messages") or []},
+            )
+            return
+        if parts.path == "/file":
+            if not self._authorised(query):
+                self._json(401, {"error": "unauthorised"})
+                return
+            wanted = (query.get("name") or [""])[0]
+            path = self.server.uploads / Path(wanted).name
+            if not wanted or not path.is_file():
+                self._json(404, {"error": "no such file"})
+                return
+            self._send(200, path.read_bytes(), mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+            return
         self._json(404, {"error": "not found"})
 
     # -------------------------------------------------------------------- POST
@@ -405,6 +695,28 @@ class Handler(BaseHTTPRequestHandler):
             self._json(401, {"error": "unauthorised - send Authorization: Bearer <token>"})
             return
 
+        if parts.path == "/upload":
+            raw = self._body()
+            supplied = Path((query.get("name") or [""])[0] or "upload").name
+            name = re.sub(r"[^A-Za-z0-9._ -]", "_", supplied)[:80] or "upload"
+            if not raw:
+                self._json(400, {"error": "empty upload"})
+                return
+            stored = "%s-%s" % (datetime.now().strftime("%Y%m%d-%H%M%S"), name)
+            try:
+                (self.server.uploads / stored).write_bytes(raw)
+            except OSError as exc:
+                self._json(500, {"error": self._failure("upload", exc)})
+                return
+            kind = "image" if (mimetypes.guess_type(name)[0] or "").startswith("image/") else "file"
+            self._json(200, {"name": stored, "kind": kind, "bytes": len(raw)})
+            return
+
+        if parts.path == "/chats":
+            data = self.server.chats.new()
+            self._json(200, {"id": data["id"], "title": data["title"]})
+            return
+
         if parts.path == "/chat":
             raw = self._body()
             try:
@@ -413,15 +725,31 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": "body must be JSON"})
                 return
             message = str(payload.get("message") or "").strip()[:MAX_MESSAGE]
+            chat_id = str(payload.get("chat") or "")[:80]
+            files = []
+            supplied = payload.get("files")
+            if isinstance(supplied, list):
+                for item in supplied[:10]:
+                    if not isinstance(item, dict):
+                        continue
+                    name = Path(str(item.get("name") or "")).name
+                    if name:
+                        files.append({"name": name, "kind": str(item.get("kind") or "file")})
+            if files:
+                # The model cannot read bytes out of the request, so hand it the
+                # paths its own file tools already understand.
+                message = (message + "".join(
+                    "\n[attached: %s]" % (self.server.uploads / item["name"]) for item in files
+                )).strip()
             if not message:
                 self._json(400, {"error": "message is required"})
                 return
             try:
-                reply = self.server.chat(message)
+                reply, chat_id = self.server.chat(message, chat_id, files)
             except Exception as exc:
                 self._json(500, {"error": self._failure("chat", exc)})
                 return
-            self._json(200, {"reply": reply})
+            self._json(200, {"reply": reply, "chat": chat_id})
             return
 
         if parts.path == "/voice":
@@ -445,11 +773,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"heard": "", "reply": ""})
                 return
             try:
-                reply = self.server.chat(heard)
+                reply, chat_id = self.server.chat(heard, (query.get("chat") or [""])[0])
             except Exception as exc:
                 self._json(500, {"error": self._failure("voice chat", exc)})
                 return
-            self._json(200, {"heard": heard, "reply": reply})
+            self._json(200, {"heard": heard, "reply": reply, "chat": chat_id})
             return
 
         self._json(404, {"error": "not found"})
