@@ -328,7 +328,11 @@ The token is stored in the phone's local storage after the first load, so the UR
 
 Search engines treat a datacenter address as a bot. From a Hetzner box DuckDuckGo answers with an "anomaly" page and Bing answers with *Best Buy* and a dictionary entry, so the only engine left was Wikipedia — which happily "answered" *best cheap gaming mouse on Amazon* with articles about Amazon Luna and a video game. That fallthrough is gone: a shopping query never reaches Wikipedia now, and an engine that fails is rested for ten minutes instead of costing fifteen seconds on every retry. An honest *search is down* is better than five junk searches.
 
-For search that actually works from the VPS, give it a key. Exa's free tier is about 2,800 searches, then $10 of credit a month, no card: <https://exa.ai>.
+For search that actually works from the VPS, give it a key. Exa's free tier is about 2,800 searches, then $10 of credit a month, no card. Sign up here — this link drops you straight on the API keys page after the Google/email sign-in, so you can copy the key immediately:
+
+<https://dashboard.exa.ai/onboarding-guest?redirect=%2Fapi-keys>
+
+If you already have an account, the keys page is <https://dashboard.exa.ai/api-keys>.
 
 1. Create the key, then put it in the service (never in a file in this repo):
 
