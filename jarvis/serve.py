@@ -45,51 +45,76 @@ INDEX_HTML = """<!doctype html>
 <link rel="apple-touch-icon" href="/icon-192.png">
 <title>Jarvis</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 16px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
-         background: #0d1117; color: #e6edf3; display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
-  header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 8px; }
-  h1 { font-size: 15px; letter-spacing: .28em; margin: 0; font-weight: 600; color: #58a6ff; }
-  #status { font-size: 12px; color: #8b949e; flex: 1; min-width: 0; }
-  header button { background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 10px;
-                  padding: 6px 10px; font-size: 13px; }
-  #log { flex: 1; overflow-y: auto; padding: 8px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
-  .msg { max-width: 92%; padding: 10px 13px; border-radius: 14px; white-space: pre-wrap; word-wrap: break-word; }
-  .you { align-self: flex-end; background: #1f6feb; color: #fff; border-bottom-right-radius: 4px; }
-  .jarvis { align-self: flex-start; background: #161b22; border: 1px solid #21262d; border-bottom-left-radius: 4px; }
-  .meta { align-self: center; font-size: 12px; color: #8b949e; text-align: center; }
-  .msg img { max-width: 100%; border-radius: 10px; margin-top: 6px; display: block; }
-  .attach-name { display: block; margin-top: 6px; font-size: 12px; opacity: .85; }
-  .bar { padding: 10px 12px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid #21262d; background: #0d1117; }
+  :root {
+    color-scheme: dark;
+    --bg: #05070b;
+    --surface: #0b1119;
+    --surface-2: #0f1a24;
+    --line: #17232f;
+    --accent: #3b82f6;
+    --accent-dim: #13283f;
+    --text: #e9eff7;
+    --muted: #7b8798;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+         display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+  header { display: flex; align-items: center; gap: 10px; padding: 14px 16px 11px;
+           border-bottom: 1px solid var(--line); }
+  h1 { font-size: 13px; letter-spacing: .32em; margin: 0; font-weight: 600; }
+  #status { font-size: 11px; color: var(--muted); letter-spacing: .04em; flex: 1; min-width: 0;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header button { background: transparent; color: var(--muted); border: 1px solid var(--line);
+                  border-radius: 999px; padding: 7px 13px; font-size: 12px; letter-spacing: .06em; }
+  header button:active { background: var(--surface-2); color: var(--text); }
+  #log { flex: 1; overflow-y: auto; padding: 18px 16px 8px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 88%; padding: 11px 14px; border-radius: 16px; white-space: pre-wrap;
+         overflow-wrap: anywhere; font-size: 15px; }
+  .you { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 6px; }
+  .jarvis { align-self: flex-start; background: var(--surface); border: 1px solid var(--line);
+            border-bottom-left-radius: 6px; }
+  .meta { align-self: center; font-size: 11.5px; color: var(--muted); text-align: center; letter-spacing: .02em; }
+  .msg img { max-width: 100%; border-radius: 10px; margin-top: 8px; display: block; }
+  .attach-name { display: block; margin-top: 6px; font-size: 12px; opacity: .8; }
+  .bar { padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
+         border-top: 1px solid var(--line); background: var(--bg); }
   #tray { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; }
   #tray:empty { display: none; }
-  #tray img { height: 54px; border-radius: 8px; border: 1px solid #30363d; display: block; }
-  .thumb { flex: 0 0 auto; font-size: 11px; color: #8b949e; }
-  .row { display: flex; gap: 8px; align-items: center; }
-  #attach { width: 46px; height: 46px; font-size: 22px; line-height: 1; border-radius: 12px;
-            border: 1px solid #30363d; background: #161b22; color: #e6edf3; }
+  #tray img { height: 52px; border-radius: 10px; border: 1px solid var(--line); display: block; }
+  .thumb { flex: 0 0 auto; font-size: 11px; color: var(--muted); }
+  .row { display: flex; gap: 6px; align-items: center; }
+  #attach { width: 42px; height: 42px; font-size: 20px; line-height: 1; border-radius: 12px;
+            border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
   #file { display: none; }
-  #text { flex: 1; min-width: 0; padding: 12px; font-size: 16px; border-radius: 12px;
-          border: 1px solid #30363d; background: #161b22; color: #e6edf3; }
-  #send { padding: 0 16px; height: 46px; font-size: 15px; border: 0; border-radius: 12px; background: #1f6feb; color: #fff; }
-  #talk { width: 100%; padding: 14px; margin-bottom: 8px; font-size: 16px; font-weight: 600; border: 0;
-          border-radius: 14px; background: #238636; color: #fff; touch-action: none;
+  #text { flex: 1; min-width: 0; padding: 11px 14px; font-size: 16px; border-radius: 12px;
+          border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+  #text::placeholder { color: #55616f; }
+  #text:focus { outline: none; border-color: #24405f; }
+  #send { padding: 0 18px; height: 42px; font-size: 14px; border: 0; border-radius: 12px;
+          background: var(--accent); color: #fff; font-weight: 500; }
+  #talk { width: 100%; padding: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600;
+          border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+          color: var(--text); letter-spacing: .02em; touch-action: none;
           user-select: none; -webkit-user-select: none; }
-  #talk.on { background: #da3633; }
-  #drawer { position: fixed; top: 0; bottom: 0; left: 0; width: 80%; max-width: 330px; background: #0d1117;
-            border-right: 1px solid #21262d; transform: translateX(-102%); transition: transform .18s ease;
-            overflow-y: auto; padding: 16px; z-index: 5; }
+  #talk.on { background: #2b1416; border-color: #5c2226; color: #ff9d9d; }
+  #send:disabled, #attach:disabled, #talk:disabled, #text:disabled { opacity: .45; }
+  #drawer { position: fixed; top: 0; bottom: 0; left: 0; width: 82%; max-width: 340px;
+            background: var(--bg); border-right: 1px solid var(--line); transform: translateX(-102%);
+            transition: transform .18s ease; overflow-y: auto; padding: 20px 14px; z-index: 5; }
   #drawer.open { transform: none; }
-  #drawer h2 { font-size: 12px; letter-spacing: .18em; color: #8b949e; margin: 4px 0 12px; font-weight: 600; }
-  .chat { padding: 10px 12px; border-radius: 10px; margin-bottom: 6px; background: #161b22;
-          border: 1px solid #21262d; }
-  .chat b { display: block; font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chat small { color: #8b949e; font-size: 11px; }
-  .chat.active { border-color: #1f6feb; }
-  .chat { display: flex; align-items: center; gap: 8px; }
+  #drawer h2 { font-size: 10.5px; letter-spacing: .2em; color: var(--muted); margin: 2px 0 14px;
+               font-weight: 600; text-transform: uppercase; }
+  .chat { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 12px;
+          margin-bottom: 6px; border: 1px solid transparent; }
   .chat .text { flex: 1; min-width: 0; }
-  .del { background: none; border: 0; color: #8b949e; font-size: 17px; padding: 2px 6px; line-height: 1; }
+  .chat b { display: block; font-size: 14px; font-weight: 500; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap; }
+  .chat small { color: var(--muted); font-size: 11px; }
+  .chat.active { background: var(--accent-dim); border-color: #1f3f63; }
+  .chat.active b { color: #cfe3ff; }
+  .chat.active small::after { content: " - current"; color: #7fb0ea; }
+  .del { background: none; border: 0; color: var(--muted); font-size: 16px; padding: 4px 6px; line-height: 1; }
   #shade { position: fixed; inset: 0; background: #000a; display: none; z-index: 4; }
   #shade.open { display: block; }
 </style>
@@ -132,6 +157,7 @@ const shade = document.getElementById("shade");
 const chatlist = document.getElementById("chatlist");
 let chatId = localStorage.getItem("jarvis_chat") || "";
 let pending = [];
+let sending = false;
 
 let statusBase = "connecting...";
 let statusAt = Date.now();
@@ -199,15 +225,28 @@ function toggleDrawer(open) {
 async function loadChats() {
   try {
     const data = await api("/chats");
+    let chats = data.chats || [];
+    if (chatId && !chats.some(function (item) { return item.id === chatId; })) {
+      // The open chat must be in its own list even before its first stored turn.
+      try {
+        const current = await api("/chats/" + encodeURIComponent(chatId));
+        chats = [{
+          id: current.id,
+          title: current.title || "New chat",
+          count: (current.messages || []).length,
+          when: "now"
+        }].concat(chats);
+      } catch (error) { /* it was deleted */ }
+    }
     chatlist.innerHTML = "";
-    if (!data.chats.length) {
+    if (!chats.length) {
       const empty = document.createElement("div");
       empty.className = "meta";
       empty.textContent = "No chats yet.";
       chatlist.appendChild(empty);
       return;
     }
-    data.chats.forEach(function (item) {
+    chats.forEach(function (item) {
       const row = document.createElement("div");
       row.className = "chat" + (item.id === chatId ? " active" : "");
       const body = document.createElement("div");
@@ -282,7 +321,17 @@ function speak(reply) {
   speechSynthesis.cancel();
   speechSynthesis.speak(utterance);
 }
+function setLocked(locked) {
+  ["send", "attach", "talk"].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = locked;
+  });
+  textInput.disabled = locked;
+}
 async function send(message) {
+  if (sending) return;
+  sending = true;
+  setLocked(true);
   const files = pending.slice();
   pending = [];
   renderTray();
@@ -303,6 +352,7 @@ async function send(message) {
     setStatus("ready");
     speak(data.reply || "");
   } catch (error) { fail(error.message); }
+  finally { sending = false; setLocked(false); }
 }
 document.getElementById("send").onclick = function () {
   const value = textInput.value.trim();
