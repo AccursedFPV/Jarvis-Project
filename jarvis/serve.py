@@ -59,76 +59,77 @@ INDEX_HTML = """<!doctype html>
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body { margin: 0; background: var(--bg); color: var(--text);
-         font: 16px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+         font: 14.5px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
          display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
-  header { display: flex; align-items: center; gap: 10px; padding: 14px 16px 11px;
+  header { display: flex; align-items: center; gap: 8px; padding: 9px 12px 7px;
            border-bottom: 1px solid var(--line); }
-  h1 { font-size: 13px; letter-spacing: .32em; margin: 0; font-weight: 600; }
-  #status { font-size: 11px; color: var(--muted); letter-spacing: .04em; flex: 1; min-width: 0;
+  h1 { font-size: 12px; letter-spacing: .3em; margin: 0; font-weight: 600; }
+  #status { font-size: 10.5px; color: var(--muted); letter-spacing: .04em; flex: 1; min-width: 0;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   header button { background: transparent; color: var(--muted); border: 1px solid var(--line);
-                  border-radius: 999px; padding: 7px 13px; font-size: 12px; letter-spacing: .06em; }
+                  border-radius: 999px; padding: 4px 10px; font-size: 11px; letter-spacing: .06em; }
   header button:active { background: var(--surface-2); color: var(--text); }
-  #log { flex: 1; overflow-y: auto; padding: 18px 16px 8px; display: flex; flex-direction: column; gap: 10px; }
-  .msg { max-width: 88%; padding: 11px 14px; border-radius: 16px; white-space: pre-wrap;
-         overflow-wrap: anywhere; font-size: 15px; }
+  #log { flex: 1; overflow-y: auto; padding: 12px 12px 6px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 90%; padding: 8px 11px; border-radius: 14px; white-space: pre-wrap;
+         overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.45; }
+  .msg a { color: #8fbcff; text-decoration: underline; text-underline-offset: 2px; }
   .you { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 6px; }
   .jarvis { align-self: flex-start; background: var(--surface); border: 1px solid var(--line);
             border-bottom-left-radius: 6px; }
-  .meta { align-self: center; font-size: 11.5px; color: var(--muted); text-align: center; letter-spacing: .02em; }
+  .meta { align-self: center; font-size: 10.5px; color: var(--muted); text-align: center; letter-spacing: .02em; }
   .msg img { max-width: 100%; border-radius: 10px; margin-top: 8px; display: block; }
-  .attach-name { display: block; margin-top: 6px; font-size: 12px; opacity: .8; }
-  .bar { padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
+  .attach-name { display: block; margin-top: 4px; font-size: 11px; opacity: .8; }
+  .bar { padding: 7px 10px calc(9px + env(safe-area-inset-bottom));
          border-top: 1px solid var(--line); background: var(--bg); }
   #tray { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; }
   #tray:empty { display: none; }
   #tray img { height: 52px; border-radius: 10px; border: 1px solid var(--line); display: block; }
   .thumb { flex: 0 0 auto; font-size: 11px; color: var(--muted); }
   .row { display: flex; gap: 6px; align-items: center; }
-  #attach { width: 42px; height: 42px; font-size: 20px; line-height: 1; border-radius: 12px;
+  #attach { width: 38px; height: 38px; font-size: 18px; line-height: 1; border-radius: 11px;
             border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
   #file { display: none; }
-  #text { flex: 1; min-width: 0; padding: 11px 14px; font-size: 16px; border-radius: 12px;
+  #text { flex: 1; min-width: 0; padding: 9px 12px; font-size: 16px; border-radius: 11px;
           border: 1px solid var(--line); background: var(--surface); color: var(--text); }
   #text::placeholder { color: #55616f; }
   #text:focus { outline: none; border-color: #24405f; }
-  #send { padding: 0 18px; height: 42px; font-size: 14px; border: 0; border-radius: 12px;
+  #send { padding: 0 14px; height: 38px; font-size: 13px; border: 0; border-radius: 11px;
           background: var(--accent); color: #fff; font-weight: 500; }
-  #talk { width: 100%; padding: 13px; margin-bottom: 8px; font-size: 15px; font-weight: 600;
-          border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+  #talk { width: 100%; padding: 9px; margin-bottom: 6px; font-size: 13.5px; font-weight: 600;
+          border: 1px solid var(--line); border-radius: 11px; background: var(--surface-2);
           color: var(--text); letter-spacing: .02em; touch-action: none;
           user-select: none; -webkit-user-select: none; }
   #talk.on { background: #2b1416; border-color: #5c2226; color: #ff9d9d; }
   #send:disabled, #attach:disabled, #talk:disabled, #text:disabled { opacity: .45; }
   #drawer { position: fixed; top: 0; bottom: 0; left: 0; width: 82%; max-width: 340px;
             background: var(--bg); border-right: 1px solid var(--line); transform: translateX(-102%);
-            transition: transform .18s ease; overflow-y: auto; padding: 20px 14px; z-index: 5; }
+            transition: transform .18s ease; overflow-y: auto; padding: 16px 12px; z-index: 5; }
   #drawer.open { transform: none; }
-  #drawer h2 { font-size: 10.5px; letter-spacing: .2em; color: var(--muted); margin: 2px 0 14px;
+  #drawer h2 { font-size: 10px; letter-spacing: .2em; color: var(--muted); margin: 2px 0 10px;
                font-weight: 600; text-transform: uppercase; }
-  .chat { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 12px;
+  .chat { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 11px;
           margin-bottom: 6px; border: 1px solid transparent; }
   .chat .text { flex: 1; min-width: 0; }
-  .chat b { display: block; font-size: 14px; font-weight: 500; overflow: hidden;
+  .chat b { display: block; font-size: 13px; font-weight: 500; overflow: hidden;
             text-overflow: ellipsis; white-space: nowrap; }
-  .chat small { color: var(--muted); font-size: 11px; }
+  .chat small { color: var(--muted); font-size: 10.5px; }
   .chat.active { background: var(--accent-dim); border-color: #1f3f63; }
   .chat.active b { color: #cfe3ff; }
   .chat.active small::after { content: " - current"; color: #7fb0ea; }
-  .del { background: none; border: 0; color: var(--muted); font-size: 16px; padding: 4px 6px; line-height: 1; }
+  .del { background: none; border: 0; color: var(--muted); font-size: 15px; padding: 4px 6px; line-height: 1; }
   #shade { position: fixed; inset: 0; background: #000a; display: none; z-index: 4; }
   #shade.open { display: block; }
-  .think { align-self: flex-start; max-width: 88%; font-size: 12.5px; color: #93a8c0;
+  .think { align-self: flex-start; max-width: 90%; font-size: 11.5px; color: #93a8c0;
            border-left: 2px solid #1f3f63; padding: 1px 0 1px 10px; display: none; }
   .think.on { display: block; }
-  .think-head { font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase;
+  .think-head { font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
                 color: #64809e; user-select: none; -webkit-user-select: none; padding: 2px 0; }
   .think-head::after { content: "  tap to fold"; letter-spacing: 0; text-transform: none;
                        color: #3d5674; font-size: 10px; }
   .think-body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px;
-                max-height: 38vh; overflow-y: auto; opacity: .9; }
+                max-height: 30vh; overflow-y: auto; opacity: .9; }
   .think.folded .think-body, .think.folded .steps { display: none; }
-  .steps { margin-top: 6px; font-size: 12px; color: #7f97b3; }
+  .steps { margin-top: 4px; font-size: 11px; color: #7f97b3; }
   .steps div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .steps div::before { content: "\\203A  "; color: #4a6b8c; }
 </style>
@@ -196,10 +197,38 @@ function fail(message) {
   setStatus("offline");
   if (message) bubble(message + " (tap hold-to-talk to retry)", "meta");
 }
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+  });
+}
+function prettyUrl(url) {
+  // A phone bubble is not the place for a 120-character Amazon address.
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\\./, "");
+    const path = parsed.pathname === "/" ? "" : parsed.pathname;
+    return host + (path.length > 24 ? path.slice(0, 24) + "..." : path);
+  } catch (error) { return url; }
+}
+function mdToHtml(text) {
+  // Only what the model is allowed to use: [label](link), bare links, **bold**.
+  let out = escapeHtml(text);
+  out = out.replace(/\\[([^\\]]{1,160})\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, function (match, label, url) {
+    return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+  });
+  out = out.replace(/(^|[\\s(])(https?:\\/\\/[^\\s<")]+)/g, function (match, before, url) {
+    return before + '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + prettyUrl(url) + "</a>";
+  });
+  return out.replace(/\\*\\*([^*]{1,200})\\*\\*/g, "<strong>$1</strong>");
+}
+function shortenStep(text) {
+  return String(text).replace(/https?:\\/\\/[^\\s)]+/g, function (url) { return prettyUrl(url); });
+}
 function bubble(content, who) {
   const div = document.createElement("div");
   div.className = "msg " + who;
-  div.textContent = content;
+  if (who === "jarvis") { div.innerHTML = mdToHtml(content); } else { div.textContent = content; }
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
   return div;
@@ -386,7 +415,8 @@ async function send(message) {
       view.body.textContent += event.d;
     } else if (event.t === "step") {
       const line = document.createElement("div");
-      line.textContent = event.d;
+      line.textContent = shortenStep(event.d);
+      line.title = event.d;
       view.steps.appendChild(line);
       view.head.textContent = "working";
       // Anything written before a tool ran was narration, not the answer.
@@ -401,7 +431,7 @@ async function send(message) {
         localStorage.setItem("jarvis_chat", chatId);
       }
       const text = event.reply || "(empty reply)";
-      answerBubble().textContent = text;
+      answerBubble().innerHTML = mdToHtml(text);
       speak(text);
     }
     log.scrollTop = log.scrollHeight;
