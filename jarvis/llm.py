@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -30,6 +31,17 @@ class Reply:
     finish_reason: str = ""
 
 
+def _budget() -> float:
+    """Total seconds one model reply may take, retries included (JARVIS_LLM_BUDGET)."""
+    raw = os.environ.get("JARVIS_LLM_BUDGET", "").strip()
+    if not raw:
+        return 150.0
+    try:
+        return max(20.0, min(600.0, float(raw)))
+    except ValueError:
+        return 150.0
+
+
 class _Retry(Exception):
     def __init__(self, message: str, partial: bool = False, wait: Optional[float] = None) -> None:
         super().__init__(message)
@@ -55,6 +67,8 @@ class LLM:
         on_token: Optional[Callable[[str], None]] = None,
     ) -> Reply:
         attempts = 4
+        budget = _budget()
+        deadline = time.monotonic() + budget
         last: Optional[_Retry] = None
         for attempt in range(attempts):
             try:
@@ -66,8 +80,14 @@ class LLM:
                 # A free tier throttles per minute, so 1.5s is not enough; the
                 # vendor's own Retry-After wins when it sends one.
                 delay = exc.wait if exc.wait is not None else 2.0 * (3 ** attempt)
+                if time.monotonic() + delay > deadline:
+                    # Waiting again would leave the phone staring at "thinking"
+                    # for minutes, so give up while the reason is still fresh.
+                    break
                 time.sleep(max(0.0, min(delay, 30.0)))
-        raise LLMError(str(last) if last else "The model request failed.")
+        detail = str(last) if last else "The model request failed."
+        spent = time.monotonic() - deadline + budget
+        raise LLMError("%s (gave up after %.0fs)" % (detail, spent))
 
     # ------------------------------------------------------------------ stream
 

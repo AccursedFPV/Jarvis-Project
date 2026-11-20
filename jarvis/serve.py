@@ -133,7 +133,25 @@ const chatlist = document.getElementById("chatlist");
 let chatId = localStorage.getItem("jarvis_chat") || "";
 let pending = [];
 
-function setStatus(t) { statusEl.textContent = t; }
+let statusBase = "connecting...";
+let statusAt = Date.now();
+let statusTicker = null;
+function setStatus(t) {
+  statusBase = t;
+  statusAt = Date.now();
+  statusEl.textContent = t;
+  const working = t === "thinking..." || t === "sending..." || t === "recording...";
+  if (working && !statusTicker) {
+    statusTicker = setInterval(function () {
+      const seconds = Math.round((Date.now() - statusAt) / 1000);
+      if (seconds > 2) statusEl.textContent = statusBase + " " + seconds + "s";
+    }, 1000);
+  }
+  if (!working && statusTicker) {
+    clearInterval(statusTicker);
+    statusTicker = null;
+  }
+}
 function fail(message) {
   setStatus("offline");
   if (message) bubble(message + " (tap hold-to-talk to retry)", "meta");
@@ -277,8 +295,10 @@ async function send(message) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: message, chat: chatId, files: files.map(function (item) { return { name: item.name, kind: item.kind }; }) })
     });
-    chatId = data.chat;
-    localStorage.setItem("jarvis_chat", chatId);
+    if (data.chat) {
+      chatId = data.chat;
+      localStorage.setItem("jarvis_chat", chatId);
+    }
     bubble(data.reply || "(empty reply)", "jarvis");
     setStatus("ready");
     speak(data.reply || "");
@@ -583,7 +603,11 @@ class JarvisServer(ThreadingHTTPServer):
         return data or self.chats.new()
 
     def chat(self, message: str, chat_id: str = "", files: Any = None) -> Any:
-        with self.lock:
+        # One reply at a time: a second message would otherwise queue silently
+        # behind a slow one and look like nothing is happening.
+        if not self.lock.acquire(timeout=2):
+            return "I am still on the previous message - give me a moment.", chat_id
+        try:
             data = self.conversation(chat_id)
             # Continue from the stored transcript, not from whatever an earlier
             # phone session left in memory.
@@ -596,6 +620,8 @@ class JarvisServer(ThreadingHTTPServer):
             self.chats.append(data, {"role": "user", "text": message, "files": files or []})
             self.chats.append(data, {"role": "assistant", "text": reply})
             return reply, data["id"]
+        finally:
+            self.lock.release()
 
     def transcribe(self, audio: Any) -> str:
         if self._transcriber is None:
