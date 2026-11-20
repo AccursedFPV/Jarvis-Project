@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -50,6 +51,35 @@ def _budget() -> float:
         return 150.0
 
 
+def _thinking() -> Optional[str]:
+    """Chain-of-thought setting for each request (JARVIS_THINKING).
+
+    GLM-4.7 thinks compulsorily unless told not to, and that reasoning happens
+    before the first visible word: a one-line answer to "Jarvis?" took 70s.
+    Off by default, because a companion that answers in 3s is worth more than
+    one that reasons for a minute about a greeting. Set JARVIS_THINKING=on to
+    bring it back for hard work, or =auto to leave the choice to the vendor.
+    """
+    raw = os.environ.get("JARVIS_THINKING", "").strip().lower()
+    if raw in {"on", "enabled", "true", "1", "yes", "think"}:
+        return "enabled"
+    if raw in {"auto", "default", "vendor"}:
+        return None
+    return "disabled"
+
+
+def _log(message: str) -> None:
+    """Keep timing and fallback notes in journald, where slowness can be seen."""
+    try:
+        print("jarvis: llm %s" % message, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+class _ThinkingRejected(Exception):
+    """This model refuses to run with thinking disabled."""
+
+
 class _Retry(Exception):
     def __init__(
         self,
@@ -84,6 +114,8 @@ class LLM:
         self.model = model
         self.timeout = timeout
         self.url = _completions_url(base_url)
+        # Reported by /health so a slow answer can be traced to the setting.
+        self.thinking = _thinking()
         # (url, api_key, model) tried in order when the one before it is
         # congested. Same provider or a different one; Jarvis does not care.
         self.fallbacks: List[Any] = []
@@ -125,6 +157,8 @@ class LLM:
                 return self._with_retries(url, key, name, messages, tools, temperature, on_token, attempts, deadline)
             except LLMError as exc:
                 failures.append("%s: %s" % (name, exc) if len(targets) > 1 else str(exc))
+                if index + 1 < len(targets):
+                    _log("%s gave nothing usable, trying %s next" % (name, targets[index + 1][2]))
                 # Only someone else's congestion is worth another target, and a
                 # reply already appearing on the phone cannot be restarted.
                 if not exc.capacity or exc.partial:
@@ -144,10 +178,26 @@ class LLM:
         attempts: int,
         deadline: float,
     ) -> Reply:
+        started = time.monotonic()
+        first_word: List[float] = []
+
+        def relay(text: str) -> None:
+            if not first_word:
+                first_word.append(time.monotonic())
+            if on_token:
+                on_token(text)
+
         last: Optional[_Retry] = None
         for attempt in range(attempts):
             try:
-                return self._stream(url, api_key, name, messages, tools, temperature, on_token)
+                reply = self._stream(url, api_key, name, messages, tools, temperature, relay)
+                now = time.monotonic()
+                waited = "%.1fs to first word" % (first_word[0] - started) if first_word else "no words streamed"
+                _log(
+                    "%s replied in %.1fs (%s, %d chars, %d attempt%s)"
+                    % (name, now - started, waited, len(reply.content), attempt + 1, "" if attempt == 0 else "s")
+                )
+                return reply
             except _Retry as exc:
                 last = exc
                 if exc.partial or attempt == attempts - 1:
@@ -187,7 +237,25 @@ class LLM:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        mode = _thinking()
+        if mode:
+            payload["thinking"] = {"type": mode}
+        try:
+            return self._post(url, api_key, payload, on_token)
+        except _ThinkingRejected:
+            # GLM-5.3 and its flash sibling refuse to run without thinking. An
+            # answer with the vendor's default beats an error about a switch.
+            payload.pop("thinking", None)
+            _log("%s refuses thinking=disabled, continuing with its default" % model)
+            return self._post(url, api_key, payload, on_token)
 
+    def _post(
+        self,
+        url: str,
+        api_key: str,
+        payload: Dict[str, Any],
+        on_token: Optional[Callable[[str], None]],
+    ) -> Reply:
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -252,6 +320,8 @@ class LLM:
         except urllib.error.HTTPError as exc:
             detail = _read_error_body(exc)
             message = _http_error_message(exc.code, detail)
+            if exc.code == 400 and "thinking" in (detail or "").lower():
+                raise _ThinkingRejected(message) from exc
             if exc.code == 429 or exc.code >= 500:
                 raise _Retry(message, wait=_retry_after(exc.headers), capacity=True) from exc
             raise LLMError(message) from exc

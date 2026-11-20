@@ -771,6 +771,7 @@ class Handler(BaseHTTPRequestHandler):
                     "model": self.server.agent.llm.model,
                     "endpoint": self.server.agent.llm.url,
                     "fallbacks": [entry[2] for entry in self.server.agent.llm.fallbacks],
+                    "thinking": self.server.agent.llm.thinking or "vendor default",
                     "skills": len(self.server.agent.toolbox.schemas()),
                 },
             )
