@@ -523,6 +523,9 @@ def _run_server(agent: Agent, ui: UI, config: Config, host: Optional[str], port:
         ui.warn("Risky actions run without asking: anyone with the token can use this shell.")
     else:
         ui.info("Risky actions are refused here - no one is at a terminal to approve them.")
+    prewarm = getattr(agent, "prewarm", None)
+    if callable(prewarm):
+        prewarm()  # upstream bridge: start it now, not on the first message
     try:
         server.serve_forever()
     except KeyboardInterrupt:

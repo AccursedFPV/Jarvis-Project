@@ -106,6 +106,29 @@ def _seed_config(path: Path, base_url: str, api_key: str, model: str) -> None:
     brave = _setting("BRAVE_SEARCH_API_KEY", "JARVIS_BRAVE_SEARCH_API_KEY")
     if brave:
         existing["brave_search_api_key"] = brave
+
+    # Upstream's own tools are weather, clocks and search, so the model cannot
+    # see this machine at all. Register our tool box as an MCP server: upstream
+    # then offers the model self__run_command, self__read_file and so on. A
+    # hand-written "self" entry wins, and JARVIS_BRAIN_TOOLS=off turns it off.
+    if _setting("JARVIS_BRAIN_TOOLS", default="on").lower() not in ("0", "off", "no", "false"):
+        mcps = existing.get("mcps")
+        if not isinstance(mcps, dict):
+            mcps = {}
+        mcps.setdefault(
+            "self",
+            {
+                "command": _setting("JARVIS_BRAIN_PYTHON", default=sys.executable),
+                "args": [str(Path(__file__).resolve().parent / "jarvis_tools_mcp.py")],
+                "env": {
+                    "PYTHONPATH": str(Path(__file__).resolve().parent.parent),
+                    "JARVIS_APP_DIR": str(Path(__file__).resolve().parent.parent),
+                    "JARVIS_HOME": str(_home()),
+                },
+                "idle_timeout_sec": 900,
+            },
+        )
+        existing["mcps"] = mcps
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8")
@@ -146,6 +169,21 @@ class Brain:
         from jarvis.reply.engine import run_reply_engine
 
         self.cfg = load_settings()
+        # Upstream's engine reads MCP tools from a cache its desktop daemon
+        # fills; running the engine directly means we have to fill it, or the
+        # model never sees self__run_command / self__read_file.
+        self.tools = 0
+        mcps = getattr(self.cfg, "mcps", {}) or {}
+        if mcps:
+            try:
+                from jarvis.tools.registry import initialize_mcp_tools
+
+                found, errors = initialize_mcp_tools(mcps, verbose=False)
+                self.tools = len(found)
+                for server, problem in errors.items():
+                    sys.stderr.write("jarvis tools MCP (%s): %s\n" % (server, problem))
+            except Exception as exc:
+                sys.stderr.write("jarvis tools MCP: %s: %s\n" % (type(exc).__name__, exc))
         self.db = Database(self.cfg.db_path, self.cfg.sqlite_vss_path)
         self.memory = DialogueMemory(
             inactivity_timeout=self.cfg.dialogue_memory_timeout, max_interactions=20
@@ -157,6 +195,7 @@ class Brain:
             model=self.cfg.llm_chat_model,
             endpoint=self.cfg.llm_base_url,
             home=str(path.parent),
+            tools=self.tools,
         )
         return True
 

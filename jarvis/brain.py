@@ -51,6 +51,7 @@ class UpstreamBrain:
         self._proc: Optional[subprocess.Popen] = None
         self._model = ""
         self._endpoint = ""
+        self._tools = 0
 
     # ------------------------------------------------------------------ describe
 
@@ -62,7 +63,23 @@ class UpstreamBrain:
             "endpoint": self._endpoint or os.environ.get("JARVIS_BASE_URL", ""),
             "thinking": "vendor default",
             "search": "upstream (brave key or Wikipedia)",
+            # Tools from brain/jarvis_tools_mcp.py: run_command, read_file, ...
+            "tools": self._tools,
         }
+
+    def prewarm(self) -> None:
+        """Start the bridge before the first message, so /health is truthful
+        about the tool count and the first answer does not wait for startup."""
+
+        def warm() -> None:
+            try:
+                with self._lock:
+                    if not self._alive():
+                        self._start()
+            except Exception:  # a failed prewarm must not take the server down
+                pass
+
+        threading.Thread(target=warm, name="brain-warm", daemon=True).start()
 
     # ------------------------------------------------------------------- process
 
@@ -128,6 +145,10 @@ class UpstreamBrain:
             if event.get("event") == "ready":
                 self._model = str(event.get("model") or "")
                 self._endpoint = str(event.get("endpoint") or "")
+                try:
+                    self._tools = int(event.get("tools") or 0)
+                except (TypeError, ValueError):
+                    self._tools = 0
                 return True
             if event.get("event") == "error":
                 self._error(str(event.get("text") or "the upstream brain refused to start"))

@@ -3,9 +3,10 @@
 #
 # Run as root on the VPS, after the phone server itself is installed:
 #
-#   cd ~/Jarvis-Project && git pull
-#   sudo cp -r jarvis/*.py /opt/jarvis/jarvis/ && sudo cp -r brain /opt/jarvis/
-#   sudo bash deploy/vps-install-upstream.sh
+#   cd ~/Jarvis-Project && git pull && sudo bash deploy/vps-install-upstream.sh
+#
+# It copies the app code out of that checkout itself (jarvis/*.py and the
+# bridge in brain/), so there is no separate cp step to get wrong.
 #
 # Upstream is a desktop app, but its answering path is a plain Python package.
 # This installs that package in its own virtualenv at /opt/jarvis-upstream and
@@ -22,6 +23,7 @@
 
 set -euo pipefail
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="/opt/jarvis"
 UPSTREAM_DIR="/opt/jarvis-upstream"
 UPSTREAM_REPO="https://github.com/isair/jarvis.git"
@@ -38,8 +40,18 @@ echo "    app: $APP_DIR    upstream: $UPSTREAM_DIR"
 
 [ "$(id -u)" = "0" ] || fail "run this as root (sudo bash deploy/vps-install-upstream.sh)"
 [ -f "$APP_DIR/jarvis/serve.py" ] || fail "no phone server at $APP_DIR - run deploy/vps-install.sh first"
-[ -f "$APP_DIR/brain/jarvis_brain.py" ] || fail "brain/jarvis_brain.py is missing - copy the repo to $APP_DIR first"
-[ -f "$APP_DIR/brain/requirements.txt" ] || fail "brain/requirements.txt is missing - copy the repo to $APP_DIR first"
+
+# Deploy the code from this checkout, so /health reports the repo's version and
+# the bridge and its tool server are always the same commit.
+[ -d "$REPO_DIR/jarvis" ] && [ -d "$REPO_DIR/brain" ] || fail "run this from the repo checkout (no jarvis/ and brain/ next to deploy/)"
+echo "==> installing the app code from $REPO_DIR"
+install -d "$APP_DIR/jarvis" "$APP_DIR/brain"
+cp "$REPO_DIR/jarvis/"*.py "$APP_DIR/jarvis/"
+cp "$REPO_DIR/brain/"*.py "$REPO_DIR/brain/requirements.txt" "$APP_DIR/brain/"
+
+[ -f "$APP_DIR/brain/jarvis_brain.py" ] || fail "brain/jarvis_brain.py is missing from the checkout"
+[ -f "$APP_DIR/brain/jarvis_tools_mcp.py" ] || fail "brain/jarvis_tools_mcp.py is missing from the checkout"
+[ -f "$APP_DIR/brain/requirements.txt" ] || fail "brain/requirements.txt is missing from the checkout"
 [ -f "$ENV_FILE" ] || fail "$ENV_FILE is missing - run deploy/vps-install.sh first"
 
 # Upstream needs 3.11 or later.
@@ -90,6 +102,7 @@ chmod 600 "$ENV_FILE"
 
 # The bridge writes its own config and SQLite memory under JARVIS_HOME.
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$UPSTREAM_DIR" "$APP_DIR/brain" 2>/dev/null || true
+chown "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR"/jarvis/*.py 2>/dev/null || true
 
 echo "==> restarting the service"
 systemctl restart jarvis-serve
