@@ -65,8 +65,12 @@ python3 -m venv "$UPSTREAM_DIR/.venv"
 "$UPSTREAM_DIR/.venv/bin/pip" install --quiet -r "$APP_DIR/brain/requirements.txt"
 
 echo "==> checking the upstream core imports"
-if ! PYTHONPATH="$UPSTREAM_DIR/src" "$UPSTREAM_DIR/.venv/bin/python" -c \
-    "from jarvis.reply.engine import run_reply_engine" ; then
+# Run this from a neutral directory: ``python -c`` puts the current working
+# directory first on sys.path, and this repo has its own ``jarvis`` package, so
+# running it from the project folder imports ours and fails with "No module
+# named 'jarvis.reply'".
+if ! (cd /tmp && PYTHONPATH="$UPSTREAM_DIR/src" "$UPSTREAM_DIR/.venv/bin/python" -c \
+    "import jarvis, jarvis.reply.engine; print('    core:', jarvis.__file__)") ; then
     fail "the upstream core did not import - check the pip output above"
 fi
 
