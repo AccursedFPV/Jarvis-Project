@@ -322,6 +322,7 @@ The token is stored in the phone's local storage after the first load, so the UR
 
 - **The PC must be awake.** If it sleeps, the phone has nothing to talk to. Set Windows to stay awake, or enable Wake-on-LAN and wake it first. A ~$4–6/month VPS could hold the server for when the PC is off, but the 8B+ model still needs the PC's GPU — that's the real reason to keep the PC on.
 - **Real "Hey Jarvis" on the phone needs an Android app.** A browser tab cannot listen in the background (and Android suspends the mic when the screen locks), so the web client is typed input with spoken replies, and the hold-to-talk microphone is parked for now. A small Android app with a foreground service could run the same `hey_jarvis` model on the phone and call this server — that is the next piece, and the API is already there for it (`POST /chat`, `POST /voice`, `GET /health`).
+- **Turning the screen off does not lose the answer.** Android freezes a background tab, so the page may drop its connection mid-turn; the server keeps working and saves the reply, and the page picks it up (*catching up...*) when the screen wakes instead of asking the question a second time. To make the freeze less likely, set Chrome — or the installed Jarvis shortcut — and Tailscale to **Unrestricted** battery use in Android settings.
 - Your conversation and memory now travel over your private network to your own PC. Still yours, not a third party's.
 
 ### Search that works from a server

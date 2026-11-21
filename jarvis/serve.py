@@ -192,6 +192,8 @@ let sending = false;
 let stopping = false;
 let activeTurn = "";
 let controller = null;
+let lastReply = "";   // the last answer shown, so a catch-up never repeats it
+let knownCount = 0;    // how many stored messages the page has already seen
 
 let statusBase = "connecting...";
 let statusAt = Date.now();
@@ -291,6 +293,12 @@ function renderMessage(message) {
   const div = bubble(message.text || "", message.role === "user" ? "you" : "jarvis");
   (message.files || []).forEach(function (item) { showAttachment(div, item.name, item.kind); });
 }
+function lastAnswer(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "assistant") return String(messages[index].text || "");
+  }
+  return "";
+}
 async function api(path, options) {
   options = options || {};
   options.headers = Object.assign({ "Authorization": "Bearer " + token }, options.headers || {});
@@ -363,6 +371,8 @@ async function openChat(id) {
     log.innerHTML = "";
     if (!data.messages.length) log.innerHTML = "<div class='meta'>Ask me anything.</div>";
     data.messages.forEach(renderMessage);
+    knownCount = data.messages.length;
+    lastReply = lastAnswer(data.messages);
     log.scrollTop = log.scrollHeight;
     setStatus("ready");
   } catch (error) { fail(error.message); }
@@ -375,6 +385,8 @@ async function deleteChat(id, title) {
       chatId = "";
       localStorage.removeItem("jarvis_chat");
       log.innerHTML = "<div class='meta'>Ask me anything.</div>";
+      knownCount = 0;
+      lastReply = "";
       setStatus("ready");
     }
     loadChats();
@@ -611,6 +623,30 @@ async function stopTurn() {
   } catch (error) { /* the abort below still frees the page */ }
   if (controller) controller.abort();
 }
+async function catchUp(baseCount, attempts) {
+  // A dropped stream is not a lost answer: the server finishes the turn and
+  // writes it into the chat file whether or not the phone is still listening.
+  // So go and read it there instead of paying for the same answer twice.
+  if (!chatId) return "";
+  for (let tries = 0; tries < (attempts || 240); tries += 1) {
+    setStatus("catching up...");
+    await new Promise(function (resolve) { setTimeout(resolve, 3000); });
+    if (stopping) return "";
+    try {
+      const data = await api("/chats/" + encodeURIComponent(chatId));
+      const messages = data.messages || [];
+      const last = messages[messages.length - 1];
+      if (last && last.role === "assistant") {
+        const text = String(last.text || "");
+        if (text && (messages.length >= baseCount + 2 || text !== lastReply)) {
+          knownCount = messages.length;
+          return text;
+        }
+      }
+    } catch (error) { /* the tunnel may still be down - try again */ }
+  }
+  return "";
+}
 async function send(message) {
   if (sending) return;
   sending = true;
@@ -619,6 +655,11 @@ async function send(message) {
   if ("speechSynthesis" in window) speechSynthesis.cancel();
   activeTurn = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
   controller = new AbortController();
+  // Where the transcript stood before asking, so the answer can be recognised
+  // later if the phone loses the stream.
+  const baseCount = knownCount;
+  let lastBeat = Date.now();
+  let onAir = false;   // did the server even accept this turn?
   setLocked(true);
   setSendMode("stop");
   const files = pending.slice();
@@ -629,7 +670,15 @@ async function send(message) {
   setStatus("thinking...");
 
   const view = workPanel();
+  const beatTimer = setInterval(function () {
+    // A minute of silence means the socket died while the screen was off; drop
+    // it so the catch-up below can collect the answer the server finished.
+    if (Date.now() - lastBeat > 45000) { lastBeat = Date.now(); controller.abort(); }
+  }, 5000);
+
   function handle(event) {
+    lastBeat = Date.now();
+
     if (event.t === "think") {
       view.think(event.d);
     } else if (event.t === "step") {
@@ -638,6 +687,9 @@ async function send(message) {
     } else if (event.t === "say") {
       view.say(event.d);
       setStatus("replying...");
+    } else if (event.t === "chat") {
+      chatId = event.chat;
+      localStorage.setItem("jarvis_chat", chatId);
     } else if (event.t === "error") {
       throw new Error(event.d);
     } else if (event.t === "done") {
@@ -646,6 +698,8 @@ async function send(message) {
         localStorage.setItem("jarvis_chat", chatId);
       }
       const text = event.reply || "(empty reply)";
+      knownCount = baseCount + 2;
+      lastReply = text;
       // The work folds away, the answer takes its place, and the phone says it.
       view.finish();
       bubble(text, "jarvis");
@@ -666,6 +720,7 @@ async function send(message) {
       const data = await response.json().catch(function () { return {}; });
       throw new Error(data.error || ("HTTP " + response.status));
     }
+    onAir = true;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let waiting = "", failure = null;
@@ -683,7 +738,7 @@ async function send(message) {
     if (failure) throw failure;
     setStatus("ready");
   } catch (error) {
-    if (stopping || error.name === "AbortError") {
+    if (stopping) {
       const partial = view.partial().trim();
       view.finish();
       if (partial) bubble(partial, "jarvis");
@@ -692,13 +747,29 @@ async function send(message) {
       note.textContent = "stopped";
       log.appendChild(note);
       log.scrollTop = log.scrollHeight;
+      knownCount = baseCount + 2;
       setStatus("ready");
     } else {
+      // The screen went off or the tunnel dropped mid-answer. The turn is still
+      // running on the server, so wait for the reply it saves rather than
+      // resending the question and getting a second answer.
       view.finish();
-      fail(error.message);
+      // A turn the server accepted gets a generous wait; one that never got
+      // there only gets a few minutes before the retry hint comes back.
+      const answer = await catchUp(baseCount, onAir ? 240 : 60);
+      if (answer) {
+        lastReply = answer;
+        bubble(answer, "jarvis");
+        speak(answer);
+        log.scrollTop = log.scrollHeight;
+        setStatus("ready");
+      } else if (!stopping) {
+        fail(error && error.message ? error.message : "lost the connection");
+      }
     }
   }
   finally {
+    clearInterval(beatTimer);
     sending = false;
     stopping = false;
     activeTurn = "";
@@ -726,6 +797,8 @@ document.getElementById("new").onclick = async function () {
     chatId = data.id;
     localStorage.setItem("jarvis_chat", chatId);
     log.innerHTML = "<div class='meta'>Ask me anything.</div>";
+    knownCount = 0;
+    lastReply = "";
     setStatus("ready");
     toggleDrawer(false);
   } catch (error) { fail(error.message); }
@@ -946,6 +1019,7 @@ class JarvisServer(ThreadingHTTPServer):
         on_step: Any = None,
         on_token: Any = None,
         should_stop: Any = None,
+        on_chat: Any = None,
     ) -> Any:
         # One reply at a time: a second message would otherwise queue silently
         # behind a slow one and look like nothing is happening.
@@ -953,6 +1027,14 @@ class JarvisServer(ThreadingHTTPServer):
             return "I am still on the previous message - give me a moment.", chat_id
         try:
             data = self.conversation(chat_id)
+            # Name the transcript before the answer exists. If the phone's
+            # screen goes off and its connection drops, this id is how the page
+            # finds the reply the server finished without it.
+            if on_chat is not None:
+                try:
+                    on_chat(data["id"])
+                except Exception:
+                    pass
             # Continue from the stored transcript, not from whatever an earlier
             # phone session left in memory.
             self.agent.history = [
@@ -1025,9 +1107,27 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Transfer-Encoding", "chunked")
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
+        self._writes = threading.Lock()
         self._streaming = True
 
+    def _ping(self, alive: threading.Event) -> None:
+        """Pulse the stream while the model is quiet.
+
+        A long model call can be silent for half a minute, and a phone that has
+        just woken up cannot tell a slow answer from a dead socket without one.
+        """
+        while not alive.wait(12):
+            if not self._streaming:
+                return
+            self._event({"t": "ping"})
+
     def _event(self, payload: Any) -> None:
+        if not self._streaming:
+            return
+        with self._writes:
+            self._write_event(payload)
+
+    def _write_event(self, payload: Any) -> None:
         if not self._streaming:
             return
         data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
@@ -1041,6 +1141,12 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def _end_stream(self) -> None:
+        if not self._streaming:
+            return
+        with self._writes:
+            self._write_end()
+
+    def _write_end(self) -> None:
         if not self._streaming:
             return
         try:
@@ -1263,6 +1369,9 @@ class Handler(BaseHTTPRequestHandler):
                 cancel = threading.Event()
                 if turn:
                     self.server.cancels[turn] = cancel
+                # Keep the line to the phone alive through the silent stretches.
+                alive = threading.Event()
+                threading.Thread(target=self._ping, args=(alive,), daemon=True).start()
                 try:
                     reply, chat_id = self.server.chat(
                         message,
@@ -1270,6 +1379,7 @@ class Handler(BaseHTTPRequestHandler):
                         files,
                         images,
                         vision or None,
+                        on_chat=lambda chat: self._event({"t": "chat", "chat": chat}),
                         on_reasoning=lambda text: self._event({"t": "think", "d": text}),
                         on_step=lambda text: self._event({"t": "step", "d": text}),
                         on_token=lambda text: self._event({"t": "say", "d": text}),
@@ -1280,6 +1390,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._end_stream()
                     return
                 finally:
+                    alive.set()
                     if turn:
                         self.server.cancels.pop(turn, None)
                 self._event({"t": "done", "reply": reply, "chat": chat_id})
