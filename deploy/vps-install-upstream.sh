@@ -30,6 +30,12 @@ SERVICE_USER="jarvis"
 
 fail() { echo "error: $*" >&2; exit 1; }
 
+# A silent exit is the worst outcome on a phone screen: say where it stopped.
+trap 'echo "error: the installer stopped at line $LINENO (exit $?)" >&2' ERR
+
+echo "==> Jarvis upstream brain installer"
+echo "    app: $APP_DIR    upstream: $UPSTREAM_DIR"
+
 [ "$(id -u)" = "0" ] || fail "run this as root (sudo bash deploy/vps-install-upstream.sh)"
 [ -f "$APP_DIR/jarvis/serve.py" ] || fail "no phone server at $APP_DIR - run deploy/vps-install.sh first"
 [ -f "$APP_DIR/brain/jarvis_brain.py" ] || fail "brain/jarvis_brain.py is missing - copy the repo to $APP_DIR first"
