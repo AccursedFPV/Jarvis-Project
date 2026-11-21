@@ -26,6 +26,12 @@ from .memory import Memory
 from .skills import SKILL_PREFIX, Skills
 
 MAX_OUTPUT = 12000
+# A command or file that needs root answers like this on this box, and the model
+# used to spend the rest of the turn re-planning around it.
+PERMISSION_DENIED = re.compile(
+    r"permission denied|operation not permitted|must be root|are you root|no tty present",
+    re.IGNORECASE,
+)
 MAX_READ_BYTES = 5_000_000
 MAX_FETCH_BYTES = 2_000_000
 # DuckDuckGo answers a bot-looking User-Agent with an empty "anomaly" page and
@@ -288,6 +294,13 @@ def _truncate(text: str, limit: int = MAX_OUTPUT) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "\n... (output truncated)"
+
+
+def _me() -> str:
+    try:
+        return getpass.getuser()
+    except Exception:
+        return os.environ.get("USER") or "unknown"
 
 
 def _human_size(size: int) -> str:
@@ -878,6 +891,14 @@ class Toolbox:
         output = ((completed.stdout or "") + (completed.stderr or "")).strip()
         if not output:
             output = "(no output)"
+        if PERMISSION_DENIED.search(output):
+            # Say what this means once, in the tool result, instead of letting the
+            # model guess ("I don't have root privileges") and re-plan.
+            output += (
+                "\n(hint: I run as the unprivileged user %r, so root-only files and commands "
+                "cannot be read or run here. sudo only restarts my own service. Say in one line "
+                "what was denied and use what I did get; do not retry with sudo.)" % _me()
+            )
         return "exit=%d\n%s" % (completed.returncode, _truncate(output))
 
     def open_target(self, target: str, **_: Any) -> str:

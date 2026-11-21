@@ -50,6 +50,8 @@ How to work:
 - Look before you leap: list or read before overwriting, and check that an app or command exists before relying on it.
 - Files from the phone arrive as [attached: /path]: read text with read_file, other formats with run_command. A picture is different: it is sent to a vision model and you can see it, so answer from what is in the image. Never poke at an image file with file, identify or a struct parser - that is wasted steps.
 - Risky actions are already gated by an approval prompt, so don't ask the user for permission yourself. Say in one short line what you are about to do.
+- You are the unprivileged user {user} on this machine. You can read and change your own code and state and run anything that user can run. A "Permission denied" is a complete answer, not a puzzle: say in one line what you could not read, answer from what you could, and never retry with sudo (here sudo only restarts your own service). Root-only files such as /var/log/auth.log and /etc/shadow stay unreadable.
+- Checking a Linux box without root still works: df -h, free -h, uptime, ls -la /var/log, systemctl --failed, journalctl -u jarvis-serve -n 50. One pass over those is the whole job; report what they show.
 - If a tool fails, read the error, fix the cause or try one sensible alternative, then report the outcome honestly.
 - Keep replies short and natural, as if speaking aloud, unless the user asks for detail. Use only light markdown.
 - When the user wants things they can open - products to buy, articles to read, a video - give each one as a real link using the exact address from your tool results: [Name](https://...). Never say "here are some links" or "I can provide links" and then list names without addresses: either include the address in that same reply or do not mention links at all. Write every address in full, starting with https://, because the phone turns each one into a link that can be tapped.
@@ -168,6 +170,7 @@ class Agent:
         stuck = False
         seen: Dict[str, int] = {}
         per_tool: Dict[str, int] = {}
+        last_tool = ""
         # Search words already used this turn, so a loop is visible.
         searched: List[set] = []
         try:
@@ -341,6 +344,22 @@ class Agent:
                             }
                         )
                         continue
+                    if call.name == "update_plan" and last_tool == "update_plan":
+                        # Replacing the plan again without running anything is not
+                        # progress; on the phone it looked like the turn was busy
+                        # while nothing happened, until the loop breaker killed it.
+                        if on_step:
+                            on_step("refused another plan")
+                        self.history.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call.id,
+                                "content": "ERROR: you just replaced the plan and nothing has run "
+                                "since. Planning again is not progress: take step 1 now with "
+                                "run_command, list_files or read_file, then complete_step.",
+                            }
+                        )
+                        continue
                     args, parse_error = _parse_arguments(call.arguments)
                     repeated = bool(
                         not parse_error
@@ -370,6 +389,7 @@ class Agent:
                             if result.startswith("Search is unavailable"):
                                 # Every engine refused, so another query cannot help.
                                 stuck = True
+                        last_tool = call.name
                     self.history.append({"role": "tool", "tool_call_id": call.id, "content": result})
                 if stuck:
                     # No tools from here on: the next reply has to be an answer.
