@@ -383,6 +383,35 @@ ssh root@<vps-ip> && cd Jarvis && bash deploy/vps-install.sh
 
 That gives you a systemd service, a generated token, `ufw` limited to Tailscale, and server-side Whisper for phone voice. Hetzner CX23 (2 vCPU / 4 GB, ~$7/mo, hourly billing) is the best value; OVH VPS-1 (~$4.54) is the cheapest 4 GB plan; Oracle's Always Free ARM tier is $0 if you can get through signup.
 
+### Swap the brain for the upstream isair/jarvis engine
+
+[isair/jarvis](https://github.com/isair/jarvis) is a desktop app with a strong text core: a planner, a tool loop, an MCP runtime and a memory graph. The app itself is not usable from a phone, but its answering path is a plain Python package, so it can replace this repo's agent loop while the phone page, token, chat history, systemd unit and port stay exactly as they are.
+
+```bash
+cd ~/Jarvis-Project && git pull
+sudo cp -r jarvis/*.py /opt/jarvis/jarvis/ && sudo cp -r brain /opt/jarvis/
+sudo bash deploy/vps-install-upstream.sh
+```
+
+The installer clones upstream to `/opt/jarvis-upstream`, builds a text-only virtualenv for it (no PyQt, no Whisper, no torch, no audio), and sets `JARVIS_BRAIN=upstream` plus `JARVIS_BRAIN_PYTHON` and `JARVIS_UPSTREAM_SRC` in `/etc/jarvis.env`. It uses the same `JARVIS_BASE_URL` / `JARVIS_API_KEY` / `JARVIS_MODEL` you already have, so Z.ai keeps doing the thinking.
+
+`/health` then reports:
+
+```json
+{"ok": true, "version": "0.9.0", "brain": "isair/jarvis (upstream)", "model": "glm-5.3"}
+```
+
+What changes: upstream's planner and tools answer instead of this repo's loop, and its SQLite memory lives in `$JARVIS_HOME/upstream/`. What does not: the phone UI, tappable links, chats drawer, Stop button, token, Tailscale address, and `/health`. Replies arrive in one piece rather than token by token, and pictures are not seen in this mode.
+
+Switch back at any time:
+
+```bash
+sudo sed -i 's/^JARVIS_BRAIN=.*/JARVIS_BRAIN=builtin/' /etc/jarvis.env
+sudo systemctl restart jarvis-serve
+```
+
+Upstream's own web search uses Brave (optional, `BRAVE_SEARCH_API_KEY`) with a Wikipedia fallback, so the Exa key is only used in the built-in brain.
+
 ### A model for that GPU
 
 An RTX 5070 Ti with 16 GB runs a much better model than the default. Pull a 14B and point Jarvis at it:

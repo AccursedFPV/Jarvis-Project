@@ -360,7 +360,11 @@ def _commit_source(root: Path, note: str = "") -> str:
             git("init", "-q")
             git("config", "user.email", "jarvis@localhost")
             git("config", "user.name", "Jarvis")
-        paths = [name for name in ("jarvis", "contrib", "deploy", "pyproject.toml", "README.md") if (root / name).exists()]
+        paths = [
+            name
+            for name in ("jarvis", "brain", "contrib", "deploy", "pyproject.toml", "README.md")
+            if (root / name).exists()
+        ]
         git("add", "-A", "--", *paths)
         if not (git("status", "--porcelain").stdout or "").strip():
             return ""

@@ -1096,11 +1096,19 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorised(query):
                 self._json(401, {"error": "unauthorised"})
                 return
+            describe = getattr(self.server.agent, "describe", None)
+            if callable(describe):
+                # A brain that reports its own facts (the upstream engine).
+                payload = {"ok": True, "version": __version__}
+                payload.update(describe())
+                self._json(200, payload)
+                return
             self._json(
                 200,
                 {
                     "ok": True,
                     "version": __version__,
+                    "brain": "built-in",
                     "model": self.server.agent.llm.model,
                     "endpoint": self.server.agent.llm.url,
                     "fallbacks": [entry[2] for entry in self.server.agent.llm.fallbacks],
@@ -1179,6 +1187,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if parts.path == "/chats":
             data = self.server.chats.new()
+            # A new chat is a new conversation for the brain too, not just a
+            # new transcript on the phone.
+            fresh = getattr(self.server.agent, "new_session", None)
+            if callable(fresh):
+                try:
+                    fresh()
+                except Exception:
+                    pass
             self._json(200, {"id": data["id"], "title": data["title"]})
             return
 

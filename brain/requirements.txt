@@ -1,0 +1,22 @@
+# The slice of upstream isair/jarvis this bridge actually imports.
+#
+# Upstream's full requirements.txt is a desktop install: PyQt6, faster-whisper
+# (torch), sounddevice, piper/chatterbox, playwright, faiss. None of it is in the
+# typed-question path, and none of it fits a small VPS, so only the libraries the
+# reply engine, its tools and its memory touch are installed here.
+#
+# Versions follow upstream's own pins where it has one.
+
+python-dotenv==1.0.1
+filelock>=3.32.7
+requests==2.32.3
+curl_cffi==0.16.3
+urllib3>=2.8.0,<3
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+html2text>=2020.1.16
+numpy<2.0.0
+rapidfuzz==3.6.1
+geoip2==4.8.0
+mcp==1.13.1
+pydantic>=2.11,<2.14

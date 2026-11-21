@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -493,6 +494,11 @@ def _run_listen(agent: Agent, ui: UI, config: Config) -> int:
     return 0
 
 
+def brain_mode() -> bool:
+    """True when the phone server should answer through upstream isair/jarvis."""
+    return os.environ.get("JARVIS_BRAIN", "").strip().lower() in {"upstream", "isair"}
+
+
 def _run_server(agent: Agent, ui: UI, config: Config, host: Optional[str], port: Optional[int]) -> int:
     """Serve the same assistant to the phone; the PC does all the work."""
     from .serve import DEFAULT_PORT, JarvisServer, load_or_create_token
@@ -511,7 +517,9 @@ def _run_server(agent: Agent, ui: UI, config: Config, host: Optional[str], port:
     ui.info("Phone: http://%s:%d/?token=%s" % (shown, number, token))
     ui.info("Token is also saved in %s" % (state_dir() / "server_token"))
     ui.info("From anywhere: run Tailscale on this PC and the phone, then use the PC's Tailscale name.")
-    if agent.toolbox.auto_approve:
+    if getattr(agent, "enabled", "") == "upstream":
+        ui.info("Brain: upstream isair/jarvis - its own tools run without our approval prompt.")
+    elif agent.toolbox.auto_approve:
         ui.warn("Risky actions run without asking: anyone with the token can use this shell.")
     else:
         ui.info("Risky actions are refused here - no one is at a terminal to approve them.")
@@ -544,6 +552,14 @@ def main(argv: Optional[list] = None) -> int:
     if args.config:
         print_config(config)
         return 0
+
+    # The phone server can answer through the upstream isair/jarvis engine
+    # instead of our own loop; it brings its own model settings, so none of the
+    # checks below apply to it.
+    if args.serve and brain_mode():
+        from .brain import UpstreamBrain
+
+        return _run_server(UpstreamBrain(config, ui), ui, config, args.host, args.port)
 
     base_url = resolve_base_url(config)
     key = api_key()
